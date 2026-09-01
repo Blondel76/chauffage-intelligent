@@ -1,0 +1,1 @@
+DOMAIN = "chauffage_intelligent"
