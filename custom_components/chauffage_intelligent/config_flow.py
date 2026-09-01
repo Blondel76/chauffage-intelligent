@@ -10,6 +10,7 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_AREA,
     CONF_CLIMATE,
+    CONF_DERIVE,
     CONF_PLANNING,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
@@ -64,6 +65,12 @@ class ChauffageIntelligentConfigFlow(
                 vol.Required(CONF_CLIMATE): selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain=["climate"],
+                    )
+                ),
+
+                vol.Required(CONF_DERIVE): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=["sensor"],
                     )
                 ),
             }
