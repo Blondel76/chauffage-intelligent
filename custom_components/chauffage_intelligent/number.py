@@ -5,12 +5,8 @@ from __future__ import annotations
 from homeassistant.components.number import NumberEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import (
-    AddEntitiesCallback,
-)
-from homeassistant.helpers.restore_state import (
-    RestoreEntity,
-)
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .calculations import calculate_new_coefficient
 from .const import DOMAIN, slugify_area
@@ -53,7 +49,7 @@ class CoefficientNumber(
         entry: ConfigEntry,
         area_slug: str,
     ) -> None:
-        """Initialize."""
+        """Initialize the coefficient."""
 
         self._entry = entry
         self._area_slug = area_slug
@@ -67,14 +63,14 @@ class CoefficientNumber(
             f"{area_slug.replace('_', ' ').title()}"
         )
 
-        # Première valeur uniquement.
-        # RestoreEntity reprendra ensuite la dernière valeur.
+        # Valeur utilisée uniquement lors de la
+        # toute première création de l'entité.
         self._attr_native_value = 25.0
 
     async def async_added_to_hass(
         self,
     ) -> None:
-        """Restore previous value."""
+        """Restore the previous coefficient."""
 
         await super().async_added_to_hass()
 
@@ -99,7 +95,7 @@ class CoefficientNumber(
         self,
         value: float,
     ) -> None:
-        """Set coefficient manually."""
+        """Set the coefficient manually."""
 
         self._attr_native_value = min(
             max(float(value), 10),
@@ -127,11 +123,11 @@ class CoefficientNumber(
         if nouveau is None:
             return
 
-        # Évite les écritures inutiles.
+        # Évite des écritures inutiles si la variation
+        # est trop faible.
         if abs(nouveau - ancien) < 0.05:
             return
 
         self._attr_native_value = nouveau
 
         self.async_write_ha_state()
-
