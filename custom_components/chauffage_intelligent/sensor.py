@@ -14,11 +14,8 @@ from .calculations import (
     get_previous_schedule,
 )
 from .const import (
-    CONF_CLIMATE,
     CONF_DERIVE,
-    CONF_PLANNING,
-    CONF_TEMP_EXT,
-    CONF_TEMP_INT,
+    DOMAIN,
     slugify_area,
 )
 
@@ -60,7 +57,7 @@ async def async_setup_entry(
 
 
 class ChauffageSensorBase(SensorEntity):
-    """Base sensor for Chauffage Intelligent."""
+    """Base sensor."""
 
     def __init__(
         self,
@@ -83,24 +80,27 @@ class ChauffageSensorBase(SensorEntity):
             f"{area_slug.replace('_', ' ').title()}"
         )
 
-        # Informations permettant à la carte de retrouver
-        # toutes les entités utilisées par cette pièce.
+        # Informations de configuration de la pièce.
+        # La carte Lovelace pourra les utiliser pour
+        # retrouver automatiquement les entités sources.
         self._attr_extra_state_attributes = {
-            "area": area_slug,
-            "temperature_interieure": entry.data.get(
-                CONF_TEMP_INT
-            ),
+            "chauffage_intelligent": True,
+            "piece": entry.data["area"],
+            "piece_slug": area_slug,
             "temperature_exterieure": entry.data.get(
-                CONF_TEMP_EXT
+                "Température extérieur"
+            ),
+            "temperature_interieure": entry.data.get(
+                "Température intérieur"
             ),
             "planning": entry.data.get(
-                CONF_PLANNING
+                "Planning de la pièce utilisé"
             ),
             "climate": entry.data.get(
-                CONF_CLIMATE
+                "Thermostat de la pièce"
             ),
             "derive_source": entry.data.get(
-                CONF_DERIVE
+                "derive capteur de température"
             ),
         }
 
@@ -269,7 +269,7 @@ class HeurePlanningPrecedentSensor(
 class HeureAnticipeeSensor(
     ChauffageSensorBase
 ):
-    """Anticipated heating time sensor."""
+    """Anticipated heating time."""
 
     _attr_icon = "mdi:clock-start"
 
