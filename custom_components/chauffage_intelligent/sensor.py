@@ -1,4 +1,4 @@
-"""Temps de chauffe for Chauffage Intelligent."""
+"""Sensors for Chauffage Intelligent."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from .const import (
     CONF_CLIMATE,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
-    DOMAIN,
 )
 
 
@@ -70,9 +69,15 @@ class TempsDeChauffeSensor(SensorEntity):
         if temp_ext is None:
             temp_ext = 10
 
-        # Coefficient temporaire.
-        # Il deviendra une entité réglable plus tard.
-        coefficient = 25
+        # --------------------------------------------------
+        # Récupération du coefficient
+        # --------------------------------------------------
+
+        coefficient = self._get_coefficient()
+
+        # --------------------------------------------------
+        # Calcul
+        # --------------------------------------------------
 
         delta = consigne - temp_int
 
@@ -91,6 +96,46 @@ class TempsDeChauffeSensor(SensorEntity):
             )
 
         return 0
+
+    def _get_coefficient(self) -> float:
+        """Read the coefficient entity."""
+
+        entity_id = (
+            f"number.chauffage_intelligent_"
+            f"{self._slugify(self._entry.title)}_coefficient"
+        )
+
+        state = self.hass.states.get(entity_id)
+
+        if state is None:
+            return 25
+
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return 25
+
+    @staticmethod
+    def _slugify(value: str) -> str:
+        """Create a simple entity-id compatible name."""
+
+        import unicodedata
+
+        value = unicodedata.normalize(
+            "NFKD",
+            value,
+        ).encode(
+            "ascii",
+            "ignore",
+        ).decode(
+            "ascii",
+        )
+
+        return (
+            value.lower()
+            .replace(" ", "_")
+            .replace("-", "_")
+        )
 
     def _get_temperature(
         self,
