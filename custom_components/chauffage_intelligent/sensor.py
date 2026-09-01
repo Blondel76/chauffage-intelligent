@@ -30,7 +30,7 @@ async def async_setup_entry(
 
 
 class TempsDeChauffeSensor(SensorEntity):
-    """Sensor calculating the estimated heating time."""
+    """Estimated heating time."""
 
     _attr_native_unit_of_measurement = "min"
     _attr_icon = "mdi:timer-outline"
@@ -39,6 +39,7 @@ class TempsDeChauffeSensor(SensorEntity):
         """Initialize the sensor."""
 
         self._entry = entry
+
         self._attr_unique_id = (
             f"{entry.entry_id}_temps_de_chauffe"
         )
@@ -55,38 +56,25 @@ class TempsDeChauffeSensor(SensorEntity):
             config.get(CONF_TEMP_INT)
         )
 
-        consigne = self._get_consigne(
-            config.get(CONF_CLIMATE)
-        )
-
         temp_ext = self._get_temperature(
             config.get(CONF_TEMP_EXT)
         )
 
-        # Valeurs par défaut si une donnée n'est pas disponible.
-        if temp_int is None:
-            return 0
+        consigne = self._get_consigne(
+            config.get(CONF_CLIMATE)
+        )
 
-        if consigne is None:
+        if temp_int is None or consigne is None:
             return 0
 
         if temp_ext is None:
             temp_ext = 10
 
-        # --------------------------------------------------
-        # Calcul
-        # --------------------------------------------------
-
-        delta = consigne - temp_int
-
         # Coefficient temporaire.
-        # Nous allons créer un vrai "number" plus tard.
+        # Il deviendra une entité réglable plus tard.
         coefficient = 25
 
-        coefficient = min(
-            max(coefficient, 10),
-            60,
-        )
+        delta = consigne - temp_int
 
         facteur_ext = 1 + (
             (temp_int - temp_ext) / 50
@@ -99,9 +87,7 @@ class TempsDeChauffeSensor(SensorEntity):
 
         if delta > 0.3:
             return round(
-                delta
-                * coefficient
-                * facteur_ext
+                delta * coefficient * facteur_ext
             )
 
         return 0
@@ -110,7 +96,7 @@ class TempsDeChauffeSensor(SensorEntity):
         self,
         entity_id: str | None,
     ) -> float | None:
-        """Read a temperature sensor."""
+        """Read a temperature entity."""
 
         if not entity_id:
             return None
@@ -129,7 +115,7 @@ class TempsDeChauffeSensor(SensorEntity):
         self,
         entity_id: str | None,
     ) -> float | None:
-        """Read the target temperature from climate."""
+        """Read the target temperature from the climate."""
 
         if not entity_id:
             return None
