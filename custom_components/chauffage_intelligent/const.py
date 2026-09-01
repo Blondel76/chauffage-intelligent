@@ -2,9 +2,9 @@
 
 DOMAIN = "chauffage_intelligent"
 
-CONF_TEMP_EXT = "temp_ext"
-CONF_TEMP_INT = "temp_int"
-CONF_CONSIGNE = "consigne"
-CONF_COEFFICIENT = "coefficient"
-CONF_PLANNING = "planning"
-CONF_ETAT = "etat"
+CONF_ROOM = "room"
+
+CONF_TEMP_EXT = "Température extérieur"
+CONF_TEMP_INT = "Température intérieur"
+CONF_PLANNING = "Planning de la pièce utilisé"
+CONF_CLIMATE = "Thermostat de la pièce"
