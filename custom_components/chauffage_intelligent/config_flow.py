@@ -8,9 +8,9 @@ from homeassistant import config_entries
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_AREA,
     CONF_CLIMATE,
     CONF_PLANNING,
-    CONF_ROOM,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
     DOMAIN,
@@ -33,23 +33,25 @@ class ChauffageIntelligentConfigFlow(
 
         if user_input is not None:
             return self.async_create_entry(
-                title=user_input[CONF_ROOM],
+                title=user_input[CONF_AREA],
                 data=user_input,
             )
 
         data_schema = vol.Schema(
             {
-                vol.Required(CONF_ROOM): str,
+                vol.Required(CONF_AREA): selector.AreaSelector(),
 
                 vol.Required(CONF_TEMP_EXT): selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain="sensor",
+                        device_class="temperature",
                     )
                 ),
 
                 vol.Required(CONF_TEMP_INT): selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain="sensor",
+                        device_class="temperature",
                     )
                 ),
 
