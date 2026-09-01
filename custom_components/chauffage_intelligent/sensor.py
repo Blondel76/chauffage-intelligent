@@ -1,4 +1,4 @@
-"""Sensors for Chauffage Intelligent."""
+"""Sensor entities for Chauffage Intelligent."""
 
 from __future__ import annotations
 
@@ -8,12 +8,14 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
     CONF_CLIMATE,
+    CONF_DERIVE,
+    CONF_PLANNING,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
+    slugify_area,
 )
 
 
@@ -22,63 +24,117 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Chauffage Intelligent sensors."""
+    """Set up heating sensors."""
+
+    area_name = entry.data["area"]
+    area_slug = slugify_area(area_name)
 
     async_add_entities(
         [
-            TempsDeChauffeSensor(entry),
-            DeriveSensor(entry),
+            TempsDeChauffeSensor(entry, area_slug),
+            DeriveSensor(entry, area_slug),
+            HeurePlanningSensor(entry, area_slug),
+            HeurePlanningPrecedentSensor(entry, area_slug),
+            HeureAnticipeeSensor(entry, area_slug),
         ]
     )
 
 
-class TempsDeChauffeSensor(SensorEntity):
-    """Estimated heating time."""
+class ChauffageSensorBase(SensorEntity):
+    """Base class for heating sensors."""
 
-    _attr_native_unit_of_measurement = "min"
-    _attr_icon = "mdi:timer-outline"
-
-    def __init__(self, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        area_slug: str,
+        key: str,
+        name: str,
+    ) -> None:
         """Initialize the sensor."""
 
         self._entry = entry
+        self._area_slug = area_slug
 
         self._attr_unique_id = (
-            f"{entry.entry_id}_temps_de_chauffe"
+            f"{entry.entry_id}_{key}"
         )
 
-        self._attr_name = "Temps de chauffe"
+        self._attr_name = (
+            f"{name} {area_slug.replace('_', ' ').title()}"
+        )
 
     @property
-    def native_value(self) -> int:
-        """Return the estimated heating time."""
+    def area_name(self) -> str:
+        """Return the configured area."""
 
+        return self._entry.data["area"]
+
+
+class TempsDeChauffeSensor(ChauffageSensorBase):
+    """Estimated heating time."""
+
+    _attr_icon = "mdi:timer-outline"
+    _attr_native_unit_of_measurement = "min"
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        area_slug: str,
+    ) -> None:
+        """Initialize."""
+
+        super().__init__(
+            entry,
+            area_slug,
+            "temps_de_chauffe",
+            "Temps de chauffe",
+        )
+
+    def update(self) -> None:
+        """Calculate the estimated heating time."""
+
+        hass = self.hass
         config = self._entry.data
 
-        temp_int = self._get_temperature(
-            config.get(CONF_TEMP_INT)
+        temp = _get_float(
+            hass,
+            config.get(CONF_TEMP_INT),
+            0,
         )
 
-        temp_ext = self._get_temperature(
-            config.get(CONF_TEMP_EXT)
-        )
-
-        consigne = self._get_consigne(
+        climate = hass.states.get(
             config.get(CONF_CLIMATE)
         )
 
-        if temp_int is None or consigne is None:
-            return 0
+        consigne = 0.0
 
-        if temp_ext is None:
-            temp_ext = 10
+        if climate:
+            consigne = _to_float(
+                climate.attributes.get("temperature"),
+                0,
+            )
 
-        coefficient = self._get_coefficient()
+        delta = consigne - temp
 
-        delta = consigne - temp_int
+        coefficient = _get_float(
+            hass,
+            f"number.coefficient_{self._area_slug}",
+            25,
+        )
+
+        coefficient = min(
+            max(coefficient, 10),
+            60,
+        )
+
+        temp_ext = _get_float(
+            hass,
+            config.get(CONF_TEMP_EXT),
+            10,
+        )
 
         facteur_ext = 1 + (
-            (temp_int - temp_ext) / 50
+            (temp - temp_ext) / 50
         )
 
         facteur_ext = min(
@@ -87,196 +143,302 @@ class TempsDeChauffeSensor(SensorEntity):
         )
 
         if delta > 0.3:
-            return round(
-                delta * coefficient * facteur_ext
+            self._attr_native_value = round(
+                delta
+                * coefficient
+                * facteur_ext
             )
-
-        return 0
-
-    def _get_coefficient(self) -> float:
-        """Read the coefficient entity."""
-
-        entity_id = (
-            f"number.chauffage_intelligent_"
-            f"{self._slugify(self._entry.title)}_coefficient"
-        )
-
-        state = self.hass.states.get(entity_id)
-
-        if state is None:
-            return 25
-
-        try:
-            return float(state.state)
-        except (ValueError, TypeError):
-            return 25
-
-    @staticmethod
-    def _slugify(value: str) -> str:
-        """Create a simple entity-id compatible name."""
-
-        import unicodedata
-
-        value = unicodedata.normalize(
-            "NFKD",
-            value,
-        ).encode(
-            "ascii",
-            "ignore",
-        ).decode(
-            "ascii",
-        )
-
-        return (
-            value.lower()
-            .replace(" ", "_")
-            .replace("-", "_")
-        )
-
-    def _get_temperature(
-        self,
-        entity_id: str | None,
-    ) -> float | None:
-        """Read a temperature entity."""
-
-        if not entity_id:
-            return None
-
-        state = self.hass.states.get(entity_id)
-
-        if state is None:
-            return None
-
-        try:
-            return float(state.state)
-        except (ValueError, TypeError):
-            return None
-
-    def _get_consigne(
-        self,
-        entity_id: str | None,
-    ) -> float | None:
-        """Read the target temperature from the climate."""
-
-        if not entity_id:
-            return None
-
-        state = self.hass.states.get(entity_id)
-
-        if state is None:
-            return None
-
-        temperature = state.attributes.get("temperature")
-
-        try:
-            return float(temperature)
-        except (ValueError, TypeError):
-            return None
+        else:
+            self._attr_native_value = 0
 
 
-class DeriveSensor(RestoreEntity, SensorEntity):
-    """Heating temperature rise per minute."""
+class DeriveSensor(ChauffageSensorBase):
+    """Expose the configured temperature derivative."""
 
-    _attr_native_unit_of_measurement = "°C/min"
     _attr_icon = "mdi:chart-line"
+    _attr_native_unit_of_measurement = "°C/min"
 
-    def __init__(self, entry: ConfigEntry) -> None:
-        """Initialize the sensor."""
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        area_slug: str,
+    ) -> None:
+        """Initialize."""
 
-        self._entry = entry
-
-        self._attr_unique_id = (
-            f"{entry.entry_id}_derive"
+        super().__init__(
+            entry,
+            area_slug,
+            "derive",
+            "Dérive",
         )
 
-        self._attr_name = "Dérive"
+    def update(self) -> None:
+        """Read the configured derivative sensor."""
 
-        self._last_temperature = None
-        self._last_time = None
-        self._derive = 0.0
+        entity_id = self._entry.data.get(
+            CONF_DERIVE
+        )
 
-    async def async_added_to_hass(self) -> None:
-        """Restore the previous value after restart."""
+        self._attr_native_value = _get_float(
+            self.hass,
+            entity_id,
+            0,
+        )
 
-        await super().async_added_to_hass()
 
-        last_state = await self.async_get_last_state()
+class HeurePlanningSensor(ChauffageSensorBase):
+    """Next heating schedule time."""
 
-        if last_state is not None:
-            try:
-                self._derive = float(last_state.state)
-            except (ValueError, TypeError):
-                self._derive = 0.0
+    _attr_icon = "mdi:clock-outline"
 
-    @property
-    def native_value(self) -> float:
-        """Return the current temperature rise per minute."""
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        area_slug: str,
+    ) -> None:
+        """Initialize."""
 
-        return round(self._derive, 4)
+        super().__init__(
+            entry,
+            area_slug,
+            "heure_planning",
+            "Heure planning",
+        )
 
-    async def async_update(self) -> None:
-        """Update the temperature rise calculation."""
+    def update(self) -> None:
+        """Calculate the next schedule time."""
+
+        planning = self.hass.states[
+            self._entry.data[CONF_PLANNING]
+        ].state
+
+        self._attr_native_value = (
+            _heure_planning(planning)
+        )
+
+
+class HeurePlanningPrecedentSensor(
+    ChauffageSensorBase
+):
+    """Previous heating schedule time."""
+
+    _attr_icon = "mdi:clock-check-outline"
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        area_slug: str,
+    ) -> None:
+        """Initialize."""
+
+        super().__init__(
+            entry,
+            area_slug,
+            "heure_planning_precedent",
+            "Heure planning précédent",
+        )
+
+    def update(self) -> None:
+        """Calculate the previous schedule time."""
+
+        planning = self.hass.states[
+            self._entry.data[CONF_PLANNING]
+        ].state
+
+        self._attr_native_value = (
+            _heure_planning_precedent(planning)
+        )
+
+
+class HeureAnticipeeSensor(ChauffageSensorBase):
+    """Calculated heating start time."""
+
+    _attr_icon = "mdi:clock-start"
+
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        area_slug: str,
+    ) -> None:
+        """Initialize."""
+
+        super().__init__(
+            entry,
+            area_slug,
+            "heure_anticipee",
+            "Heure anticipée",
+        )
+
+    def update(self) -> None:
+        """Calculate the anticipated heating time."""
 
         config = self._entry.data
 
-        temp_entity = config.get(CONF_TEMP_INT)
-        climate_entity = config.get(CONF_CLIMATE)
+        planning = self.hass.states[
+            config[CONF_PLANNING]
+        ].state
 
-        if not temp_entity or not climate_entity:
-            return
+        cible = _heure_planning(planning)
 
-        temperature_state = self.hass.states.get(temp_entity)
-        climate_state = self.hass.states.get(climate_entity)
-
-        if temperature_state is None or climate_state is None:
+        if not cible:
+            self._attr_native_value = "--"
             return
 
         try:
-            temperature = float(temperature_state.state)
-        except (ValueError, TypeError):
+            heure = cible.replace("h", ":")[:5]
+            hh, mm = map(
+                int,
+                heure.split(":"),
+            )
+
+        except (ValueError, AttributeError):
+            self._attr_native_value = cible
             return
 
-        # On ne calcule la dérive que lorsque le chauffage
-        # indique réellement qu'il est en train de chauffer.
-        hvac_action = climate_state.attributes.get("hvac_action")
-
-        if hvac_action != "heating":
-            self._last_temperature = None
-            self._last_time = None
-            return
-
-        now = datetime.now()
-
-        # Première mesure pendant la chauffe.
-        if self._last_temperature is None:
-            self._last_temperature = temperature
-            self._last_time = now
-            return
-
-        elapsed_minutes = (
-            now - self._last_time
-        ).total_seconds() / 60
-
-        # Sécurité : il faut suffisamment de temps entre
-        # deux mesures pour avoir une dérive exploitable.
-        if elapsed_minutes < 1:
-            return
-
-        delta_temperature = (
-            temperature - self._last_temperature
+        temps = _get_float(
+            self.hass,
+            f"sensor.temps_de_chauffe_{self._area_slug}",
+            0,
         )
 
-        derive = (
-            delta_temperature / elapsed_minutes
+        maintenant = datetime.now()
+
+        cible_date = maintenant.replace(
+            hour=hh,
+            minute=mm,
+            second=0,
+            microsecond=0,
         )
 
-        # On ne conserve que les valeurs positives.
-        # Si la température baisse pendant la chauffe,
-        # on considère qu'il n'y a pas de montée en température.
-        if derive > 0:
-            self._derive = round(derive, 4)
+        if temps > 0 and temps < 180:
 
-        self._last_temperature = temperature
-        self._last_time = now
+            debut = (
+                cible_date.timestamp()
+                - temps * 60
+            )
 
-        self.async_write_ha_state()
+            debut_date = datetime.fromtimestamp(
+                debut
+            )
+
+            if debut_date < maintenant:
+                self._attr_native_value = (
+                    maintenant.strftime("%H:%M")
+                )
+            else:
+                self._attr_native_value = (
+                    debut_date.strftime("%H:%M")
+                )
+
+        else:
+            self._attr_native_value = heure
+
+
+def _get_float(
+    hass: HomeAssistant,
+    entity_id: str | None,
+    default: float,
+) -> float:
+    """Get a float from an entity."""
+
+    if not entity_id:
+        return default
+
+    state = hass.states.get(entity_id)
+
+    if state is None:
+        return default
+
+    return _to_float(
+        state.state,
+        default,
+    )
+
+
+def _to_float(
+    value: object,
+    default: float,
+) -> float:
+    """Convert a value to float."""
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _heure_planning(
+    planning: str,
+) -> str:
+    """Return the next schedule."""
+
+    if not planning or planning in {
+        "unknown",
+        "unavailable",
+        "none",
+    }:
+        return "unknown"
+
+    maintenant = datetime.now().strftime("%H:%M")
+
+    for item in planning.split(","):
+
+        if "|" not in item:
+            continue
+
+        heure, minute = item.split("|", 1)
+
+        heure = heure.strip()
+        minute = minute.strip()
+
+        heure_comparee = heure.replace(
+            "h",
+            ":",
+        )
+
+        if heure_comparee > maintenant:
+            return f"{heure}|{minute}"
+
+    return planning.split(",")[0].strip()
+
+
+def _heure_planning_precedent(
+    planning: str,
+) -> str:
+    """Return the previous schedule."""
+
+    if not planning or planning in {
+        "unknown",
+        "unavailable",
+        "none",
+    }:
+        return "unknown"
+
+    maintenant = datetime.now().strftime("%H:%M")
+
+    resultat = None
+
+    for item in planning.split(","):
+
+        if "|" not in item:
+            continue
+
+        heure, minute = item.split("|", 1)
+
+        heure = heure.strip()
+        minute = minute.strip()
+
+        heure_comparee = heure.replace(
+            "h",
+            ":",
+        )
+
+        if heure_comparee <= maintenant:
+            resultat = f"{heure}|{minute}"
+
+    if resultat is not None:
+        return resultat
+
+    items = planning.split(",")
+
+    return items[-1].strip()
