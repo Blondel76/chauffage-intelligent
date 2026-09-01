@@ -8,6 +8,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
+from .const import DOMAIN, slugify_area
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -16,9 +18,15 @@ async def async_setup_entry(
 ) -> None:
     """Set up the coefficient number."""
 
+    area_name = entry.data["area"]
+    area_slug = slugify_area(area_name)
+
     async_add_entities(
         [
-            CoefficientNumber(entry),
+            CoefficientNumber(
+                entry,
+                area_slug,
+            )
         ]
     )
 
@@ -31,29 +39,34 @@ class CoefficientNumber(RestoreEntity, NumberEntity):
     _attr_native_step = 0.1
     _attr_icon = "mdi:tune"
 
-    def __init__(self, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        area_slug: str,
+    ) -> None:
         """Initialize the coefficient."""
 
         self._entry = entry
+        self._area_slug = area_slug
 
         self._attr_unique_id = (
             f"{entry.entry_id}_coefficient"
         )
 
-        self._attr_name = "Coefficient"
+        self._attr_name = (
+            f"Coefficient {area_slug.replace('_', ' ').title()}"
+        )
 
-        # Valeur utilisée uniquement lors de la toute première création.
         self._attr_native_value = 25.0
 
     async def async_added_to_hass(self) -> None:
-        """Restore the previous coefficient after a restart."""
+        """Restore the previous coefficient."""
 
         await super().async_added_to_hass()
 
         last_state = await self.async_get_last_state()
 
         if last_state is None:
-            # Première installation : on garde 25.
             self._attr_native_value = 25.0
             return
 
@@ -72,7 +85,7 @@ class CoefficientNumber(RestoreEntity, NumberEntity):
         self,
         value: float,
     ) -> None:
-        """Set the coefficient manually or automatically."""
+        """Set the coefficient."""
 
         self._attr_native_value = min(
             max(float(value), 10),
@@ -80,4 +93,3 @@ class CoefficientNumber(RestoreEntity, NumberEntity):
         )
 
         self.async_write_ha_state()
-
