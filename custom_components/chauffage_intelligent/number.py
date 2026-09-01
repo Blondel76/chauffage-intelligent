@@ -8,8 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .calculations import calculate_new_coefficient
-from .const import DOMAIN, slugify_area
+from .const import slugify_area
 
 
 async def async_setup_entry(
@@ -63,8 +62,9 @@ class CoefficientNumber(
             f"{area_slug.replace('_', ' ').title()}"
         )
 
-        # Valeur utilisée uniquement lors de la
-        # toute première création de l'entité.
+        # Première valeur.
+        # Cette valeur sera remplacée par la dernière
+        # valeur connue si l'entité possède déjà un état.
         self._attr_native_value = 25.0
 
     async def async_added_to_hass(
@@ -101,33 +101,5 @@ class CoefficientNumber(
             max(float(value), 10),
             60,
         )
-
-        self.async_write_ha_state()
-
-    async def async_update(self) -> None:
-        """Automatically learn the coefficient."""
-
-        if self._attr_native_value is None:
-            return
-
-        ancien = float(
-            self._attr_native_value
-        )
-
-        nouveau = calculate_new_coefficient(
-            self.hass,
-            self._entry.data,
-            ancien,
-        )
-
-        if nouveau is None:
-            return
-
-        # Évite des écritures inutiles si la variation
-        # est trop faible.
-        if abs(nouveau - ancien) < 0.05:
-            return
-
-        self._attr_native_value = nouveau
 
         self.async_write_ha_state()
