@@ -1,4 +1,4 @@
-"""Sensors for Chauffage Intelligent."""
+"""Temps de chauffe for Chauffage Intelligent."""
 
 from __future__ import annotations
 
