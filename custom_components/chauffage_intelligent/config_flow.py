@@ -1,4 +1,4 @@
-"""Configuration flow for Chauffage Intelligent."""
+"""Config flow for Chauffage Intelligent."""
 
 from typing import Any
 
@@ -37,33 +37,33 @@ class ChauffageIntelligentConfigFlow(
                 data=user_input,
             )
 
-        data_schema = vol.Schema(
+        schema = vol.Schema(
             {
                 vol.Required(CONF_AREA): selector.AreaSelector(),
 
                 vol.Required(CONF_TEMP_EXT): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="sensor",
-                        device_class="temperature",
+                        domain=["sensor"],
+                        device_class=["temperature"],
                     )
                 ),
 
                 vol.Required(CONF_TEMP_INT): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="sensor",
-                        device_class="temperature",
+                        domain=["sensor"],
+                        device_class=["temperature"],
                     )
                 ),
 
                 vol.Required(CONF_PLANNING): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="input_text",
+                        domain=["input_text"],
                     )
                 ),
 
                 vol.Required(CONF_CLIMATE): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain="climate",
+                        domain=["climate"],
                     )
                 ),
             }
@@ -71,5 +71,5 @@ class ChauffageIntelligentConfigFlow(
 
         return self.async_show_form(
             step_id="user",
-            data_schema=data_schema,
+            data_schema=schema,
         )
