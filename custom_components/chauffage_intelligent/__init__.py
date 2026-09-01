@@ -14,7 +14,7 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(
         entry,
-        ["sensor"],
+        ["sensor", "number"],
     )
 
     return True
@@ -28,5 +28,5 @@ async def async_unload_entry(
 
     return await hass.config_entries.async_unload_platforms(
         entry,
-        ["sensor"],
+        ["sensor", "number"],
     )
