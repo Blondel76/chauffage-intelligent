@@ -1,17 +1,9 @@
-"""Intégration Chauffage Intelligent."""
+"""Chauffage Intelligent."""
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
-
-
-async def async_setup(
-    hass: HomeAssistant,
-    config: dict,
-) -> bool:
-    """Set up the Chauffage Intelligent integration."""
-    return True
 
 
 async def async_setup_entry(
