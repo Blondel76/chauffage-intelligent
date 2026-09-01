@@ -2,7 +2,7 @@
   "domain": "chauffage_intelligent",
   "name": "Chauffage Intelligent",
   "version": "1.0.0",
-  "documentation": "https://github.com/TON_UTILISATEUR/chauffage-intelligent",
+  "documentation": "https://github.com/Blondel76/chauffage-intelligent",
   "codeowners": [],
   "config_flow": true,
   "integration_type": "hub",
