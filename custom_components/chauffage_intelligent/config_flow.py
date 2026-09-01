@@ -8,10 +8,9 @@ from homeassistant import config_entries
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_COEFFICIENT,
-    CONF_CONSIGNE,
-    CONF_ETAT,
+    CONF_CLIMATE,
     CONF_PLANNING,
+    CONF_ROOM,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
     DOMAIN,
@@ -34,12 +33,14 @@ class ChauffageIntelligentConfigFlow(
 
         if user_input is not None:
             return self.async_create_entry(
-                title="Chauffage Intelligent",
+                title=user_input[CONF_ROOM],
                 data=user_input,
             )
 
         data_schema = vol.Schema(
             {
+                vol.Required(CONF_ROOM): str,
+
                 vol.Required(CONF_TEMP_EXT): selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain="sensor",
@@ -52,25 +53,13 @@ class ChauffageIntelligentConfigFlow(
                     )
                 ),
 
-                vol.Required(CONF_CONSIGNE): selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="climate",
-                    )
-                ),
-
-                vol.Required(CONF_COEFFICIENT): selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="input_number",
-                    )
-                ),
-
                 vol.Required(CONF_PLANNING): selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain="input_text",
                     )
                 ),
 
-                vol.Required(CONF_ETAT): selector.EntitySelector(
+                vol.Required(CONF_CLIMATE): selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain="climate",
                     )
