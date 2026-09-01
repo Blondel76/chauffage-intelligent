@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import (
-    SensorEntity,
-)
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import (
-    AddEntitiesCallback,
-)
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .calculations import (
     calculate_anticipated_time,
@@ -18,9 +14,11 @@ from .calculations import (
     get_previous_schedule,
 )
 from .const import (
+    CONF_CLIMATE,
     CONF_DERIVE,
+    CONF_PLANNING,
+    CONF_TEMP_EXT,
     CONF_TEMP_INT,
-    DOMAIN,
     slugify_area,
 )
 
@@ -62,7 +60,7 @@ async def async_setup_entry(
 
 
 class ChauffageSensorBase(SensorEntity):
-    """Base sensor."""
+    """Base sensor for Chauffage Intelligent."""
 
     def __init__(
         self,
@@ -84,6 +82,27 @@ class ChauffageSensorBase(SensorEntity):
             f"{name} "
             f"{area_slug.replace('_', ' ').title()}"
         )
+
+        # Informations permettant à la carte de retrouver
+        # toutes les entités utilisées par cette pièce.
+        self._attr_extra_state_attributes = {
+            "area": area_slug,
+            "temperature_interieure": entry.data.get(
+                CONF_TEMP_INT
+            ),
+            "temperature_exterieure": entry.data.get(
+                CONF_TEMP_EXT
+            ),
+            "planning": entry.data.get(
+                CONF_PLANNING
+            ),
+            "climate": entry.data.get(
+                CONF_CLIMATE
+            ),
+            "derive_source": entry.data.get(
+                CONF_DERIVE
+            ),
+        }
 
 
 class TempsDeChauffeSensor(
@@ -250,7 +269,7 @@ class HeurePlanningPrecedentSensor(
 class HeureAnticipeeSensor(
     ChauffageSensorBase
 ):
-    """Anticipated heating time."""
+    """Anticipated heating time sensor."""
 
     _attr_icon = "mdi:clock-start"
 
@@ -296,4 +315,3 @@ class HeureAnticipeeSensor(
                 coefficient,
             )
         )
-
