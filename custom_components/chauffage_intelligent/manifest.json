@@ -3,7 +3,7 @@
   "name": "Chauffage Intelligent",
   "version": "1.0.0",
   "documentation": "https://github.com/Blondel76/chauffage-intelligent",
-  "codeowners": [],
+  "codeowners": ["@Blondel76"],
   "config_flow": true,
   "integration_type": "hub",
   "iot_class": "local_polling"
