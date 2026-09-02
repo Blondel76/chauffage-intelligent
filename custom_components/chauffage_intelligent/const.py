@@ -13,6 +13,10 @@ CONF_PLANNING = "Planning de la pièce utilisé"
 CONF_CLIMATE = "Thermostat de la pièce"
 CONF_DERIVE = "derive capteur de température"
 
+COEFFICIENT_MIN = 10.0
+COEFFICIENT_MAX = 60.0
+COEFFICIENT_DEFAULT = 25.0
+
 
 def slugify_area(area_name: str) -> str:
     """Convert an area name into a safe entity-id part."""
