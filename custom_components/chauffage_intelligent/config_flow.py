@@ -5,6 +5,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import selector
 
 from .const import (
@@ -33,8 +34,15 @@ class ChauffageIntelligentConfigFlow(
         """Handle the initial setup."""
 
         if user_input is not None:
+            await self.async_set_unique_id(user_input[CONF_AREA])
+            self._abort_if_unique_id_configured()
+
+            area_reg = ar.async_get(self.hass)
+            area_entry = area_reg.async_get_area(user_input[CONF_AREA])
+            title = area_entry.name if area_entry else user_input[CONF_AREA]
+
             return self.async_create_entry(
-                title=user_input[CONF_AREA],
+                title=title,
                 data=user_input,
             )
 
