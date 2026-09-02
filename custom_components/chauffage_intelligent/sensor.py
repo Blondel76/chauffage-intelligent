@@ -67,6 +67,7 @@ class ChauffageSensorBase(SensorEntity):
         self._area_slug = area_slug
 
         self._attr_unique_id = f"{entry.entry_id}_{key}"
+        self._attr_has_entity_name = True
         self._attr_name = name
 
         self._attr_device_info = {
