@@ -70,11 +70,33 @@ class ChauffageSensorBase(SensorEntity):
         self._attr_has_entity_name = True
         self._attr_name = name
 
-        # Fixe explicitement l'entity_id attendu (sensor.<key>_<area_slug>)
-        # au lieu de laisser HA le déduire du nom de l'appareil/de l'Area,
-        # ce qui causait le doublon (sensor.chambre_enfant_chambre_enfant_derive).
+        # Impose l'entity_id directement plutôt que de le "suggérer" :
+        # HA combine normalement Area + Device + Nom, ce qui causait le
+        # doublon. En fixant entity_id ici, on bypass complètement ce
+        # mécanisme de composition automatique.
+        self.entity_id = f"sensor.{key}_{area_slug}"
+
         self._attr_suggested_object_id = f"{key}_{area_slug}"
 
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, area_slug)},
+            "name": area_slug.replace("_", " ").title(),
+        }
+
+        # Informations de configuration de la pièce.
+        # La carte Lovelace pourra les utiliser pour
+        # retrouver automatiquement les entités sources.
+        self._attr_extra_state_attributes = {
+            "chauffage_intelligent": True,
+            "piece": entry.data[CONF_AREA],
+            "piece_slug": area_slug,
+            "temperature_exterieure": entry.data.get(CONF_TEMP_EXT),
+            "temperature_interieure": entry.data.get(CONF_TEMP_INT),
+            "planning": entry.data.get(CONF_PLANNING),
+            "climate": entry.data.get(CONF_CLIMATE),
+            "derive_source": entry.data.get(CONF_DERIVE),
+        }
+        
         self._attr_device_info = {
             "identifiers": {(DOMAIN, area_slug)},
             "name": area_slug.replace("_", " ").title(),
