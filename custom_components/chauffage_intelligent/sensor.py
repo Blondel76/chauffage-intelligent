@@ -18,7 +18,12 @@ from .calculations import (
     get_previous_schedule,
 )
 from .const import (
+    CONF_AREA,
+    CONF_CLIMATE,
     CONF_DERIVE,
+    CONF_PLANNING,
+    CONF_TEMP_EXT,
+    CONF_TEMP_INT,
     COEFFICIENT_DEFAULT,
     DOMAIN,
     slugify_area,
@@ -32,7 +37,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up Chauffage Intelligent sensors."""
 
-    area_name = entry.data["area"]
+    area_name = entry.data[CONF_AREA]
     area_slug = slugify_area(area_name)
 
     async_add_entities(
@@ -74,13 +79,13 @@ class ChauffageSensorBase(SensorEntity):
         # retrouver automatiquement les entités sources.
         self._attr_extra_state_attributes = {
             "chauffage_intelligent": True,
-            "piece": entry.data["area"],
+            "piece": entry.data[CONF_AREA],
             "piece_slug": area_slug,
-            "temperature_exterieure": entry.data.get("Température extérieur"),
-            "temperature_interieure": entry.data.get("Température intérieur"),
-            "planning": entry.data.get("Planning de la pièce utilisé"),
-            "climate": entry.data.get("Thermostat de la pièce"),
-            "derive_source": entry.data.get("derive capteur de température"),
+            "temperature_exterieure": entry.data.get(CONF_TEMP_EXT),
+            "temperature_interieure": entry.data.get(CONF_TEMP_INT),
+            "planning": entry.data.get(CONF_PLANNING),
+            "climate": entry.data.get(CONF_CLIMATE),
+            "derive_source": entry.data.get(CONF_DERIVE),
         }
 
     def _read_coefficient(self) -> float:
