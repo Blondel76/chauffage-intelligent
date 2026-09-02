@@ -8,11 +8,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN, slugify_area
-
-COEFFICIENT_MIN = 10.0
-COEFFICIENT_MAX = 60.0
-COEFFICIENT_DEFAULT = 25.0
+from .const import (
+    COEFFICIENT_DEFAULT,
+    COEFFICIENT_MAX,
+    COEFFICIENT_MIN,
+    DOMAIN,
+    slugify_area,
+)
 
 
 def _clamp(value: float) -> float:
