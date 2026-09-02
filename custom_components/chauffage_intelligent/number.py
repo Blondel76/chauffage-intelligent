@@ -71,7 +71,17 @@ class CoefficientNumber(
         self._remove_listener = None
 
         self._attr_unique_id = f"{entry.entry_id}_coefficient"
-        self._attr_name = f"Coefficient {area_slug.replace('_', ' ').title()}"
+        self._attr_has_entity_name = True
+        self._attr_name = "Coefficient"
+
+        # Impose l'entity_id directement plutôt que de le "suggérer" :
+        # HA combine normalement Area + Device + Nom, ce qui causait
+        # les doublons (ex. sensor.bureau_salle_de_jeux_bureau_derive
+        # côté sensors). On bypass ce mécanisme automatique ici aussi.
+        self.entity_id = f"number.coefficient_{area_slug}"
+
+        self._attr_suggested_object_id = f"coefficient_{area_slug}"
+
         self._attr_native_value = COEFFICIENT_DEFAULT
 
         self._attr_device_info = {
