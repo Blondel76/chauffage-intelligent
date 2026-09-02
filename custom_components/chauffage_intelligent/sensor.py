@@ -67,7 +67,7 @@ class ChauffageSensorBase(SensorEntity):
         self._area_slug = area_slug
 
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_name = f"{name} {area_slug.replace('_', ' ').title()}"
+        self._attr_name = name # f"{name} {area_slug.replace('_', ' ').title()}"
 
         self._attr_device_info = {
             "identifiers": {(DOMAIN, area_slug)},
