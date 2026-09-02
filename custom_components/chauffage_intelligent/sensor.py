@@ -8,8 +8,11 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from .calculations import (
     calculate_anticipated_time,
@@ -20,11 +23,11 @@ from .calculations import (
 from .const import (
     CONF_AREA,
     CONF_CLIMATE,
-    CONF_DERIVE,
     CONF_PLANNING,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
     COEFFICIENT_DEFAULT,
+    DERIVE_INTERVAL_MINUTES,
     DOMAIN,
     slugify_area,
 )
@@ -70,10 +73,8 @@ class ChauffageSensorBase(SensorEntity):
         self._attr_has_entity_name = True
         self._attr_name = name
 
-        # Impose l'entity_id directement plutôt que de le "suggérer" :
-        # HA combine normalement Area + Device + Nom, ce qui causait le
-        # doublon. En fixant entity_id ici, on bypass complètement ce
-        # mécanisme de composition automatique.
+        # Impose l'entity_id directement pour éviter la combinaison
+        # automatique Area + Device + Nom faite par HA.
         self.entity_id = f"sensor.{key}_{area_slug}"
 
         self._attr_suggested_object_id = f"{key}_{area_slug}"
@@ -83,9 +84,6 @@ class ChauffageSensorBase(SensorEntity):
             "name": area_slug.replace("_", " ").title(),
         }
 
-        # Informations de configuration de la pièce.
-        # La carte Lovelace pourra les utiliser pour
-        # retrouver automatiquement les entités sources.
         self._attr_extra_state_attributes = {
             "chauffage_intelligent": True,
             "piece": entry.data[CONF_AREA],
@@ -94,26 +92,6 @@ class ChauffageSensorBase(SensorEntity):
             "temperature_interieure": entry.data.get(CONF_TEMP_INT),
             "planning": entry.data.get(CONF_PLANNING),
             "climate": entry.data.get(CONF_CLIMATE),
-            "derive_source": entry.data.get(CONF_DERIVE),
-        }
-        
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, area_slug)},
-            "name": area_slug.replace("_", " ").title(),
-        }
-
-        # Informations de configuration de la pièce.
-        # La carte Lovelace pourra les utiliser pour
-        # retrouver automatiquement les entités sources.
-        self._attr_extra_state_attributes = {
-            "chauffage_intelligent": True,
-            "piece": entry.data[CONF_AREA],
-            "piece_slug": area_slug,
-            "temperature_exterieure": entry.data.get(CONF_TEMP_EXT),
-            "temperature_interieure": entry.data.get(CONF_TEMP_INT),
-            "planning": entry.data.get(CONF_PLANNING),
-            "climate": entry.data.get(CONF_CLIMATE),
-            "derive_source": entry.data.get(CONF_DERIVE),
         }
 
     def _read_coefficient(self) -> float:
@@ -154,33 +132,82 @@ class TempsDeChauffeSensor(ChauffageSensorBase):
         )
 
 
-class DeriveSensor(ChauffageSensorBase):
-    """Derivative sensor."""
+class DeriveSensor(RestoreEntity, ChauffageSensorBase):
+    """Derivative sensor, computed internally from the interior temperature."""
 
     _attr_icon = "mdi:chart-line"
     _attr_native_unit_of_measurement = "°C/min"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_should_poll = False
 
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
 
         super().__init__(entry, area_slug, "derive", "Dérive")
 
-    def update(self) -> None:
-        """Read the configured derivative sensor."""
+        self._attr_native_value = 0
+        self._reference_time = None
+        self._reference_temp = None
+        self._remove_listener = None
 
-        entity_id = self._entry.data.get(CONF_DERIVE)
+    async def async_added_to_hass(self) -> None:
+        """Restore state and start listening to the interior temperature."""
 
-        state = self.hass.states.get(entity_id) if entity_id else None
+        await super().async_added_to_hass()
 
-        if state is None:
-            self._attr_native_value = 0
+        temp_entity_id = self._entry.data.get(CONF_TEMP_INT)
+
+        if temp_entity_id:
+            self._remove_listener = async_track_state_change_event(
+                self.hass,
+                [temp_entity_id],
+                self._handle_temp_change,
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up the listener."""
+
+        if self._remove_listener is not None:
+            self._remove_listener()
+            self._remove_listener = None
+
+    async def _handle_temp_change(
+        self,
+        event: Event[EventStateChangedData],
+    ) -> None:
+        """Recalculate the derivative when the interior temperature updates."""
+
+        new_state = event.data.get("new_state")
+
+        if new_state is None:
             return
 
         try:
-            self._attr_native_value = float(state.state)
+            temp = float(new_state.state)
         except (ValueError, TypeError):
-            self._attr_native_value = 0
+            return
+
+        now = dt_util.utcnow()
+
+        if self._reference_time is None:
+            self._reference_time = now
+            self._reference_temp = temp
+            return
+
+        delta_minutes = (now - self._reference_time).total_seconds() / 60
+
+        if delta_minutes < DERIVE_INTERVAL_MINUTES:
+            return
+
+        self._attr_native_value = round(
+            (temp - self._reference_temp) / delta_minutes,
+            3,
+        )
+
+        self._reference_time = now
+        self._reference_temp = temp
+
+        self.async_write_ha_state()
 
 
 class HeurePlanningSensor(ChauffageSensorBase):
