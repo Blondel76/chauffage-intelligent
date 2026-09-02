@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
+    CONF_AREA,
     COEFFICIENT_DEFAULT,
     COEFFICIENT_MAX,
     COEFFICIENT_MIN,
@@ -29,7 +30,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the coefficient number."""
 
-    area_name = entry.data["area"]
+    area_name = entry.data[CONF_AREA]
     area_slug = slugify_area(area_name)
 
     async_add_entities(
