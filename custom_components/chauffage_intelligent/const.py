@@ -11,11 +11,12 @@ CONF_TEMP_EXT = "Température extérieur"
 CONF_TEMP_INT = "Température intérieur"
 CONF_PLANNING = "Planning de la pièce utilisé"
 CONF_CLIMATE = "Thermostat de la pièce"
-CONF_DERIVE = "derive capteur de température"
 
 COEFFICIENT_MIN = 10.0
 COEFFICIENT_MAX = 60.0
 COEFFICIENT_DEFAULT = 25.0
+
+DERIVE_INTERVAL_MINUTES = 3
 
 
 def slugify_area(area_name: str) -> str:
@@ -38,5 +39,7 @@ def slugify_area(area_name: str) -> str:
         "_",
         normalized,
     )
+
+    return normalized.strip("_")
 
     return normalized.strip("_")
