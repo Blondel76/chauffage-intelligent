@@ -8,7 +8,6 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_CLIMATE,
-    CONF_DERIVE,
     CONF_PLANNING,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
@@ -264,6 +263,7 @@ def calculate_new_coefficient(
     hass: HomeAssistant,
     config: dict,
     ancien: float,
+    derive_entity_id: str,
 ) -> float | None:
     """Calculate a new heating coefficient from the derivative."""
 
@@ -276,7 +276,7 @@ def calculate_new_coefficient(
     if climate.attributes.get("hvac_action") != "heating":
         return None
 
-    derive = get_float(hass, config.get(CONF_DERIVE), 0)
+    derive = get_float(hass, derive_entity_id, 0)
 
     # Même seuil que ton automatisation actuelle.
     if derive <= 0.02:
