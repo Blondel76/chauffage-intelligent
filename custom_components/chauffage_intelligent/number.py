@@ -12,7 +12,6 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from .calculations import calculate_new_coefficient
 from .const import (
     CONF_AREA,
-    CONF_DERIVE,
     COEFFICIENT_DEFAULT,
     COEFFICIENT_MAX,
     COEFFICIENT_MIN,
@@ -74,12 +73,7 @@ class CoefficientNumber(
         self._attr_has_entity_name = True
         self._attr_name = "Coefficient"
 
-        # Impose l'entity_id directement plutôt que de le "suggérer" :
-        # HA combine normalement Area + Device + Nom, ce qui causait
-        # les doublons (ex. sensor.bureau_salle_de_jeux_bureau_derive
-        # côté sensors). On bypass ce mécanisme automatique ici aussi.
         self.entity_id = f"number.coefficient_{area_slug}"
-
         self._attr_suggested_object_id = f"coefficient_{area_slug}"
 
         self._attr_native_value = COEFFICIENT_DEFAULT
@@ -104,14 +98,15 @@ class CoefficientNumber(
             except (ValueError, TypeError):
                 self._attr_native_value = COEFFICIENT_DEFAULT
 
-        derive_entity_id = self._entry.data.get(CONF_DERIVE)
+        # On écoute désormais notre propre capteur de dérive interne,
+        # plus un capteur externe choisi par l'utilisateur.
+        derive_entity_id = f"sensor.derive_{self._area_slug}"
 
-        if derive_entity_id:
-            self._remove_listener = async_track_state_change_event(
-                self.hass,
-                [derive_entity_id],
-                self._handle_derive_change,
-            )
+        self._remove_listener = async_track_state_change_event(
+            self.hass,
+            [derive_entity_id],
+            self._handle_derive_change,
+        )
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up the listener."""
@@ -126,10 +121,13 @@ class CoefficientNumber(
     ) -> None:
         """Recalculate the coefficient when the derivative sensor updates."""
 
+        derive_entity_id = f"sensor.derive_{self._area_slug}"
+
         nouveau = calculate_new_coefficient(
             self.hass,
             self._entry.data,
             self._attr_native_value,
+            derive_entity_id,
         )
 
         if nouveau is None:
