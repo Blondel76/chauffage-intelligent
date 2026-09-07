@@ -19,8 +19,8 @@ CONF_TEMP_INT = "Température intérieur"
 CONF_CLIMATE = "Thermostat de la pièce"
 CONF_DOOR_SENSOR = "Capteur de porte/fenêtre (optionnel)"
 
-CONF_DEFAULT_PLANNING = "default_planning"
 CONF_MODE_PLANNINGS = "mode_plannings"
+DEFAULT_PLANNING = "12:00|eco"
 
 COEFFICIENT_MIN = 10.0
 COEFFICIENT_MAX = 60.0
