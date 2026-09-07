@@ -6,14 +6,7 @@ from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 
-from .const import (
-    CONF_CLIMATE,
-    CONF_PLANNING,
-    CONF_TEMP_EXT,
-    CONF_TEMP_INT,
-    COEFFICIENT_MIN,
-    COEFFICIENT_MAX,
-)
+from .const import CONF_CLIMATE, CONF_TEMP_EXT, CONF_TEMP_INT, COEFFICIENT_MIN, COEFFICIENT_MAX
 
 
 def get_float(
@@ -35,24 +28,6 @@ def get_float(
         return float(state.state)
     except (ValueError, TypeError):
         return default
-
-
-def get_state(
-    hass: HomeAssistant,
-    entity_id: str | None,
-    default: str = "unknown",
-) -> str:
-    """Return an entity state."""
-
-    if not entity_id:
-        return default
-
-    state = hass.states.get(entity_id)
-
-    if state is None:
-        return default
-
-    return state.state
 
 
 def _clamp_coefficient(value: float) -> float:
@@ -120,19 +95,14 @@ def calculate_heating_time(
 
 
 # ==========================================================
-# PLANNING
+# PLANNING (prend directement la chaîne déjà résolue)
 # ==========================================================
 
 
-def get_next_schedule(
-    hass: HomeAssistant,
-    config: dict,
-) -> str:
-    """Return the next heating schedule."""
+def get_next_schedule(planning: str) -> str:
+    """Return the next heating schedule slot from a resolved planning string."""
 
-    planning = get_state(hass, config.get(CONF_PLANNING))
-
-    if planning in {"unknown", "unavailable", "none", ""}:
+    if not planning or planning in {"unknown", "unavailable", "none"}:
         return "unknown"
 
     maintenant = datetime.now().strftime("%H:%M")
@@ -154,20 +124,13 @@ def get_next_schedule(
         if heure > maintenant:
             return f"{h}|{m}"
 
-    # Aucun créneau restant aujourd'hui :
-    # on reprend le premier créneau du planning.
     return planning.split(",")[0].strip()
 
 
-def get_previous_schedule(
-    hass: HomeAssistant,
-    config: dict,
-) -> str:
-    """Return the previous heating schedule."""
+def get_previous_schedule(planning: str) -> str:
+    """Return the previous heating schedule slot from a resolved planning string."""
 
-    planning = get_state(hass, config.get(CONF_PLANNING))
-
-    if planning in {"unknown", "unavailable", "none", ""}:
+    if not planning or planning in {"unknown", "unavailable", "none"}:
         return "unknown"
 
     maintenant = datetime.now().strftime("%H:%M")
@@ -194,8 +157,6 @@ def get_previous_schedule(
     if resultat is not None:
         return resultat
 
-    # Aucun créneau déjà passé aujourd'hui :
-    # on prend le dernier créneau du planning.
     return planning.split(",")[-1].strip()
 
 
@@ -207,19 +168,20 @@ def get_previous_schedule(
 def calculate_anticipated_time(
     hass: HomeAssistant,
     config: dict,
+    planning: str,
     coefficient: float,
 ) -> str:
     """Calculate the anticipated heating start time."""
 
-    planning = get_next_schedule(hass, config)
+    next_slot = get_next_schedule(planning)
 
-    if planning == "unknown":
+    if next_slot == "unknown":
         return "unknown"
 
-    if "|" not in planning:
-        return planning
+    if "|" not in next_slot:
+        return next_slot
 
-    cible = planning.split("|")[0].strip()
+    cible = next_slot.split("|")[0].strip()
     cible_ok = cible.replace("h", ":")[:5]
 
     try:
@@ -234,15 +196,8 @@ def calculate_anticipated_time(
 
     maintenant = datetime.now()
 
-    cible_date = maintenant.replace(
-        hour=hh,
-        minute=mm,
-        second=0,
-        microsecond=0,
-    )
+    cible_date = maintenant.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
-    # Si le créneau est déjà passé,
-    # il s'agit du prochain jour.
     if cible_date < maintenant:
         cible_date += timedelta(days=1)
 
@@ -255,7 +210,7 @@ def calculate_anticipated_time(
 
 
 # ==========================================================
-# APPRENTISSAGE DU COEFFICIENT
+# APPRENTISSAGE DU COEFFICIENT (inchangé)
 # ==========================================================
 
 
@@ -272,20 +227,15 @@ def calculate_new_coefficient(
     if climate is None:
         return None
 
-    # On apprend uniquement lorsque le chauffage chauffe réellement.
     if climate.attributes.get("hvac_action") != "heating":
         return None
 
     derive = get_float(hass, derive_entity_id, 0)
 
-    # Même seuil que ton automatisation actuelle.
     if derive <= 0.02:
         return None
 
-    # nouveau = 1 / dérive
     nouveau = 1 / derive
-
-    # Moyenne pondérée : 80 % ancien, 20 % nouvelle mesure.
     coefficient = ancien * 0.8 + nouveau * 0.2
 
     return round(_clamp_coefficient(coefficient), 1)
