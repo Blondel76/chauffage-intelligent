@@ -24,6 +24,7 @@ from .const import (
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
     ENTRY_TYPE_ROOM,
+    MAX_PLANNING_SLOTS,
 )
 
 
@@ -41,30 +42,69 @@ def _get_preset_options(hass, climate_entity_id: str | None) -> list[str]:
     return list(state.attributes.get("preset_modes", []))
 
 
-def _build_planning_string(user_input: dict[str, Any], slot_count: int) -> str:
-    """Build the 'HH:MM|preset,...' planning string from slot fields."""
+def _parse_planning_slots(planning: str) -> list[tuple[str, str]]:
+    """Parse a 'HH:MM|preset,...' string into a list of (heure, preset) tuples."""
 
     slots = []
 
-    for i in range(1, slot_count + 1):
-        heure = user_input[f"heure_{i}"][:5]
-        preset = user_input[f"preset_{i}"]
-        slots.append((heure, preset))
+    for item in planning.split(","):
+
+        if "|" not in item:
+            continue
+
+        h, p = item.split("|", 1)
+        slots.append((h.strip(), p.strip()))
+
+    return slots
+
+
+def _build_planning_string(user_input: dict[str, Any]) -> str:
+    """Build the 'HH:MM|preset,...' planning string, skipping empty slots."""
+
+    slots = []
+
+    for i in range(1, MAX_PLANNING_SLOTS + 1):
+        heure = user_input.get(f"heure_{i}")
+        preset = user_input.get(f"preset_{i}")
+
+        if not heure or not preset:
+            continue
+
+        slots.append((heure[:5], preset))
 
     slots.sort(key=lambda s: s[0])
 
     return ",".join(f"{h}|{p}" for h, p in slots)
 
 
-def _planning_slots_schema(presets: list[str], slot_count: int) -> vol.Schema:
-    """Build a schema with `slot_count` time+preset pairs."""
+def _planning_slots_schema(
+    presets: list[str],
+    existing_slots: list[tuple[str, str]] | None = None,
+) -> vol.Schema:
+    """Build a schema with up to MAX_PLANNING_SLOTS time+preset pairs.
 
+    Slot 1 is required (at least one entry needed). The rest are optional
+    and simply ignored if left empty.
+    """
+
+    existing_slots = existing_slots or []
     schema_dict: dict[Any, Any] = {}
 
-    for i in range(1, slot_count + 1):
-        schema_dict[vol.Required(f"heure_{i}")] = selector.TimeSelector()
-        schema_dict[vol.Required(f"preset_{i}")] = selector.SelectSelector(
-            selector.SelectSelectorConfig(options=presets)
+    for i in range(1, MAX_PLANNING_SLOTS + 1):
+        idx = i - 1
+        marker = vol.Required if i == 1 else vol.Optional
+        has_existing = idx < len(existing_slots)
+
+        if has_existing:
+            heure_field = marker(f"heure_{i}", default=existing_slots[idx][0])
+            preset_field = marker(f"preset_{i}", default=existing_slots[idx][1])
+        else:
+            heure_field = marker(f"heure_{i}")
+            preset_field = marker(f"preset_{i}")
+
+        schema_dict[heure_field] = selector.TimeSelector()
+        schema_dict[preset_field] = selector.SelectSelector(
+            selector.SelectSelectorConfig(options=presets, custom_value=True)
         )
 
     return vol.Schema(schema_dict)
@@ -96,7 +136,6 @@ class ChauffageIntelligentConfigFlow(
         """Initialize."""
 
         self._room_data: dict[str, Any] = {}
-        self._slot_count: int = 0
 
     async def async_step_user(
         self,
@@ -147,7 +186,7 @@ class ChauffageIntelligentConfigFlow(
 
         if user_input is not None:
             self._room_data = {**user_input, ENTRY_TYPE: ENTRY_TYPE_ROOM}
-            return await self.async_step_default_planning_count()
+            return await self.async_step_default_planning_slots()
 
         schema = vol.Schema(
             {
@@ -177,28 +216,6 @@ class ChauffageIntelligentConfigFlow(
 
         return self.async_show_form(step_id="room", data_schema=schema)
 
-    async def async_step_default_planning_count(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ):
-        """Ask how many time slots the default planning has."""
-
-        if user_input is not None:
-            self._slot_count = user_input["nb_creneaux"]
-            return await self.async_step_default_planning_slots()
-
-        schema = vol.Schema(
-            {
-                vol.Required("nb_creneaux", default=2): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=1, max=10, mode=selector.NumberSelectorMode.BOX
-                    )
-                ),
-            }
-        )
-
-        return self.async_show_form(step_id="default_planning_count", data_schema=schema)
-
     async def async_step_default_planning_slots(
         self,
         user_input: dict[str, Any] | None = None,
@@ -208,9 +225,7 @@ class ChauffageIntelligentConfigFlow(
         presets = _get_preset_options(self.hass, self._room_data.get(CONF_CLIMATE))
 
         if user_input is not None:
-            self._room_data[CONF_DEFAULT_PLANNING] = _build_planning_string(
-                user_input, self._slot_count
-            )
+            self._room_data[CONF_DEFAULT_PLANNING] = _build_planning_string(user_input)
             self._room_data[CONF_MODE_PLANNINGS] = {}
 
             await self.async_set_unique_id(self._room_data[CONF_AREA])
@@ -224,7 +239,7 @@ class ChauffageIntelligentConfigFlow(
 
         return self.async_show_form(
             step_id="default_planning_slots",
-            data_schema=_planning_slots_schema(presets, self._slot_count),
+            data_schema=_planning_slots_schema(presets),
         )
 
     @staticmethod
@@ -235,14 +250,13 @@ class ChauffageIntelligentConfigFlow(
 
 
 class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
-    """Options flow: edit the central mode selector, or add/edit a room's mode planning."""
+    """Options flow: edit the central mode selector, or a room's plannings."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize."""
 
         self.entry = config_entry
         self._selected_mode: str | None = None
-        self._slot_count: int = 0
 
     async def async_step_init(
         self,
@@ -283,16 +297,13 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Pick which mode's planning to add or edit."""
+        """Pick 'Défaut' or a mode to edit its planning."""
 
         if user_input is not None:
             self._selected_mode = user_input["mode"]
-            return await self.async_step_mode_planning_count()
+            return await self.async_step_planning_slots()
 
-        modes = _get_central_modes(self.hass)
-
-        if not modes:
-            return self.async_abort(reason="no_modes_defined")
+        modes = ["Défaut (planning de base)"] + _get_central_modes(self.hass)
 
         schema = vol.Schema(
             {
@@ -304,48 +315,38 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="room_options", data_schema=schema)
 
-    async def async_step_mode_planning_count(
+    async def async_step_planning_slots(
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Ask how many time slots this mode's planning has."""
-
-        if user_input is not None:
-            self._slot_count = user_input["nb_creneaux"]
-            return await self.async_step_mode_planning_slots()
-
-        schema = vol.Schema(
-            {
-                vol.Required("nb_creneaux", default=2): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=1, max=10, mode=selector.NumberSelectorMode.BOX
-                    )
-                ),
-            }
-        )
-
-        return self.async_show_form(step_id="mode_planning_count", data_schema=schema)
-
-    async def async_step_mode_planning_slots(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ):
-        """Fill in the selected mode's time slots and save."""
+        """Fill in the selected mode's (or default's) time slots and save."""
 
         presets = _get_preset_options(self.hass, self.entry.data.get(CONF_CLIMATE))
+        is_default = self._selected_mode == "Défaut (planning de base)"
+
+        if is_default:
+            existing = self.entry.data.get(CONF_DEFAULT_PLANNING, "")
+        else:
+            mode_plannings = self.entry.data.get(CONF_MODE_PLANNINGS, {})
+            existing = mode_plannings.get(self._selected_mode, "")
+
+        existing_slots = _parse_planning_slots(existing) if existing else []
 
         if user_input is not None:
-            planning_str = _build_planning_string(user_input, self._slot_count)
+            planning_str = _build_planning_string(user_input)
 
-            mode_plannings = dict(self.entry.data.get(CONF_MODE_PLANNINGS, {}))
-            mode_plannings[self._selected_mode] = planning_str
+            if is_default:
+                new_data = {**self.entry.data, CONF_DEFAULT_PLANNING: planning_str}
+            else:
+                mode_plannings = dict(self.entry.data.get(CONF_MODE_PLANNINGS, {}))
+                mode_plannings[self._selected_mode] = planning_str
+                new_data = {**self.entry.data, CONF_MODE_PLANNINGS: mode_plannings}
 
-            new_data = {**self.entry.data, CONF_MODE_PLANNINGS: mode_plannings}
             self.hass.config_entries.async_update_entry(self.entry, data=new_data)
 
             return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
-            step_id="mode_planning_slots",
-            data_schema=_planning_slots_schema(presets, self._slot_count),
+            step_id="planning_slots",
+            data_schema=_planning_slots_schema(presets, existing_slots),
         )
