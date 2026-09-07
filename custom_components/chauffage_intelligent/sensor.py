@@ -23,7 +23,6 @@ from .calculations import (
 from .const import (
     CONF_AREA,
     CONF_CLIMATE,
-    CONF_PLANNING,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
     COEFFICIENT_DEFAULT,
@@ -73,10 +72,7 @@ class ChauffageSensorBase(SensorEntity):
         self._attr_has_entity_name = True
         self._attr_name = name
 
-        # Impose l'entity_id directement pour éviter la combinaison
-        # automatique Area + Device + Nom faite par HA.
         self.entity_id = f"sensor.{key}_{area_slug}"
-
         self._attr_suggested_object_id = f"{key}_{area_slug}"
 
         self._attr_device_info = {
@@ -90,7 +86,6 @@ class ChauffageSensorBase(SensorEntity):
             "piece_slug": area_slug,
             "temperature_exterieure": entry.data.get(CONF_TEMP_EXT),
             "temperature_interieure": entry.data.get(CONF_TEMP_INT),
-            "planning": entry.data.get(CONF_PLANNING),
             "climate": entry.data.get(CONF_CLIMATE),
         }
 
@@ -107,6 +102,17 @@ class ChauffageSensorBase(SensorEntity):
                 pass
 
         return COEFFICIENT_DEFAULT
+
+    def _get_planning(self) -> str:
+        """Fetch the currently resolved planning string for this room."""
+
+        data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        resolver = data.get("resolver")
+
+        if resolver is None:
+            return ""
+
+        return resolver.get_active_planning()
 
 
 class TempsDeChauffeSensor(ChauffageSensorBase):
@@ -151,7 +157,7 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
         self._remove_listener = None
 
     async def async_added_to_hass(self) -> None:
-        """Restore state and start listening to the interior temperature."""
+        """Start listening to the interior temperature."""
 
         await super().async_added_to_hass()
 
@@ -199,10 +205,7 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
         if delta_minutes < DERIVE_INTERVAL_MINUTES:
             return
 
-        self._attr_native_value = round(
-            (temp - self._reference_temp) / delta_minutes,
-            3,
-        )
+        self._attr_native_value = round((temp - self._reference_temp) / delta_minutes, 3)
 
         self._reference_time = now
         self._reference_temp = temp
@@ -223,7 +226,7 @@ class HeurePlanningSensor(ChauffageSensorBase):
     def update(self) -> None:
         """Update."""
 
-        self._attr_native_value = get_next_schedule(self.hass, self._entry.data)
+        self._attr_native_value = get_next_schedule(self._get_planning())
 
 
 class HeurePlanningPrecedentSensor(ChauffageSensorBase):
@@ -241,7 +244,7 @@ class HeurePlanningPrecedentSensor(ChauffageSensorBase):
     def update(self) -> None:
         """Update."""
 
-        self._attr_native_value = get_previous_schedule(self.hass, self._entry.data)
+        self._attr_native_value = get_previous_schedule(self._get_planning())
 
 
 class HeureAnticipeeSensor(ChauffageSensorBase):
@@ -260,5 +263,6 @@ class HeureAnticipeeSensor(ChauffageSensorBase):
         self._attr_native_value = calculate_anticipated_time(
             self.hass,
             self._entry.data,
+            self._get_planning(),
             self._read_coefficient(),
         )
