@@ -5,7 +5,13 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_MODE_SELECTOR, DOMAIN, ENTRY_TYPE, ENTRY_TYPE_CENTRAL
+from .const import (
+    CONF_MODE_SELECTOR,
+    DOMAIN,
+    ENTRY_TYPE,
+    ENTRY_TYPE_CENTRAL,
+    ENTRY_TYPE_GROUP,
+)
 from .resolver import PlanningResolver
 from .scheduler import ChauffageScheduler
 
@@ -34,7 +40,9 @@ async def async_setup_entry(
 
     hass.data.setdefault(DOMAIN, {})
 
-    if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_CENTRAL:
+    entry_type = entry.data.get(ENTRY_TYPE)
+
+    if entry_type in (ENTRY_TYPE_CENTRAL, ENTRY_TYPE_GROUP):
         hass.data[DOMAIN][entry.entry_id] = {}
         return True
 
@@ -64,7 +72,9 @@ async def async_unload_entry(
 ) -> bool:
     """Unload Chauffage Intelligent."""
 
-    if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_CENTRAL:
+    entry_type = entry.data.get(ENTRY_TYPE)
+
+    if entry_type in (ENTRY_TYPE_CENTRAL, ENTRY_TYPE_GROUP):
         hass.data[DOMAIN].pop(entry.entry_id, None)
         return True
 
