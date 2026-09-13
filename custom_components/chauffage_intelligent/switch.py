@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import CONF_AREA, DOMAIN, slugify_area
+from .const import CONF_AREA, CONF_DOOR_SENSOR, DOMAIN, slugify_area
 
 
 async def async_setup_entry(
@@ -16,7 +16,10 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the window override switch."""
+    """Set up the window override switch, only if no real door sensor is configured."""
+
+    if entry.data.get(CONF_DOOR_SENSOR):
+        return
 
     area_name = entry.data[CONF_AREA]
     area_slug = slugify_area(area_name)
