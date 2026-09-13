@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "central": {
+        "title": "Configuration centrale",
+        "data": {
+          "mode_selector": "Sélecteur de mode (input_select existant)",
+          "heating_type": "Type de chauffage"
+        }
+      },
+      "menu": {
+        "title": "Que voulez-vous ajouter ?",
+        "data": {
+          "type": "Type"
+        }
+      },
+      "group": {
+        "title": "Nouveau groupe de pièces",
+        "data": {
+          "group_name": "Nom du groupe",
+          "group_areas": "Pièces membres",
+          "group_threshold": "Seuil de température (°C)"
+        }
+      },
+      "room": {
+        "title": "Nouvelle pièce",
+        "data": {
+          "area": "Pièce",
+          "temp_ext": "Capteur de température extérieure",
+          "temp_int": "Capteur de température intérieure",
+          "climate_entity": "Thermostat de la pièce",
+          "heater_entity": "Entité de chauffe (vanne ou interrupteur)",
+          "door_sensor": "Capteur de porte/fenêtre (optionnel)"
+        }
+      },
+      "plannings": {
+        "title": "Plannings par mode"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "central_options": {
+        "data": {
+          "mode_selector": "Sélecteur de mode (input_select existant)",
+          "heating_type": "Type de chauffage"
+        }
+      },
+      "group_options": {
+        "data": {
+          "group_name": "Nom du groupe",
+          "group_areas": "Pièces membres",
+          "group_threshold": "Seuil de température (°C)"
+        }
+      },
+      "room_options": {
+        "title": "Plannings par mode"
+      }
+    }
+  }
+}
