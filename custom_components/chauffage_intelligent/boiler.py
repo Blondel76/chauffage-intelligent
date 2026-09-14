@@ -72,8 +72,15 @@ async def update_boiler_state(hass: HomeAssistant) -> None:
             should_run = True
             break
 
-    await hass.services.async_call(
-        "switch",
-        "turn_on" if should_run else "turn_off",
-        {"entity_id": boiler_entity},
-    )
+    if boiler_entity.startswith("climate."):
+        await hass.services.async_call(
+            "climate",
+            "set_hvac_mode",
+            {"entity_id": boiler_entity, "hvac_mode": "heat" if should_run else "off"},
+        )
+    else:
+        await hass.services.async_call(
+            "switch",
+            "turn_on" if should_run else "turn_off",
+            {"entity_id": boiler_entity},
+        )
