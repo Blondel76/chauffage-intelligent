@@ -23,7 +23,7 @@ CONF_TEMP_INT = "Température intérieur"
 CONF_CLIMATE = "Thermostat de la pièce"
 CONF_DOOR_SENSOR = "Capteur de porte/fenêtre (optionnel)"
 CONF_HEATER_ENTITY = "Vanne ou interrupteur du radiateur"
-CONF_BOILER_ENTITY = "Chaudière (interrupteur, optionnel)"
+CONF_BOILER_ENTITY = "Chaudière (interrupteur ou climat, optionnel si chauffage électrique)"
 
 CONF_MODE_PLANNINGS = "mode_plannings"
 DEFAULT_PLANNING = "12:00|eco"
