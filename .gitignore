@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+ENV/
+
+# Tests
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Outils de développement Python
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# Éditeurs de code
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Système
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Variables d'environnement / secrets
+.env
+.env.*
+!.env.example
+
+# Fichiers de build
+build/
+dist/
+*.egg-info/
+
+# Fichiers locaux Home Assistant
+.storage/
+home-assistant.log
+home-assistant.log.*
+home-assistant_v2.db
+home-assistant_v2.db-shm
+home-assistant_v2.db-wal
