@@ -61,17 +61,6 @@ def _get_central_modes(hass) -> list[str]:
 
     return list(state.attributes.get("options", []))
 
-def _get_room_options(hass) -> list[dict]:
-    """Return selectable options built from existing room entries (not raw HA areas)."""
-
-    options = []
-
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM:
-            options.append({"value": entry.data[CONF_AREA], "label": entry.title})
-
-    return options
-
 
 def _get_central_heating_type(hass) -> str:
     """Return the house's heating type, defaulting to gas."""
@@ -181,46 +170,39 @@ class ChauffageIntelligentConfigFlow(
 
         return self.async_show_form(step_id="central", data_schema=schema)
 
+    async def async_step_group(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ):
+        """Create a room group (thermally open rooms)."""
 
-async def async_step_group(
-    self,
-    user_input: dict[str, Any] | None = None,
-):
-    """Create a room group (thermally open rooms), from existing rooms only."""
+        if user_input is not None:
+            await self.async_set_unique_id(f"group_{user_input[CONF_GROUP_NAME]}")
+            self._abort_if_unique_id_configured()
 
-    room_options = _get_room_options(self.hass)
+            return self.async_create_entry(
+                title=f"Groupe : {user_input[CONF_GROUP_NAME]}",
+                data={**user_input, ENTRY_TYPE: ENTRY_TYPE_GROUP},
+            )
 
-    if not room_options:
-        return self.async_abort(reason="no_rooms_configured")
-
-    if user_input is not None:
-        await self.async_set_unique_id(f"group_{user_input[CONF_GROUP_NAME]}")
-        self._abort_if_unique_id_configured()
-
-        return self.async_create_entry(
-            title=f"Groupe : {user_input[CONF_GROUP_NAME]}",
-            data={**user_input, ENTRY_TYPE: ENTRY_TYPE_GROUP},
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_GROUP_NAME): selector.TextSelector(),
+                vol.Required(CONF_GROUP_AREAS): selector.AreaSelector(
+                    selector.AreaSelectorConfig(multiple=True)
+                ),
+                vol.Required(
+                    CONF_GROUP_THRESHOLD, default=DEFAULT_GROUP_THRESHOLD
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
+                    )
+                ),
+            }
         )
 
-    schema = vol.Schema(
-        {
-            vol.Required(CONF_GROUP_NAME): selector.TextSelector(),
-            vol.Required(CONF_GROUP_AREAS): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=room_options, multiple=True)
-            ),
-            vol.Required(
-                CONF_GROUP_THRESHOLD, default=DEFAULT_GROUP_THRESHOLD
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
-                )
-            ),
-        }
-    )
+        return self.async_show_form(step_id="group", data_schema=schema)
 
-    return self.async_show_form(step_id="group", data_schema=schema)
-
-    
     async def async_step_room(
         self,
         user_input: dict[str, Any] | None = None,
@@ -361,46 +343,40 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="central_options", data_schema=schema)
 
+    async def async_step_group_options(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ):
+        """Edit a group's name, areas, and threshold."""
 
-async def async_step_group_options(
-    self,
-    user_input: dict[str, Any] | None = None,
-):
-    """Edit a group's name, rooms, and threshold."""
+        if user_input is not None:
+            new_data = {**self.entry.data, **user_input}
+            self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+            return self.async_create_entry(title="", data={})
 
-    room_options = _get_room_options(self.hass)
-
-    if user_input is not None:
-        new_data = {**self.entry.data, **user_input}
-        self.hass.config_entries.async_update_entry(self.entry, data=new_data)
-        return self.async_create_entry(title="", data={})
-
-    schema = vol.Schema(
-        {
-            vol.Required(
-                CONF_GROUP_NAME, default=self.entry.data.get(CONF_GROUP_NAME)
-            ): selector.TextSelector(),
-            vol.Required(
-                CONF_GROUP_AREAS, default=self.entry.data.get(CONF_GROUP_AREAS, [])
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=room_options, multiple=True)
-            ),
-            vol.Required(
-                CONF_GROUP_THRESHOLD,
-                default=self.entry.data.get(
-                    CONF_GROUP_THRESHOLD, DEFAULT_GROUP_THRESHOLD
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_GROUP_NAME, default=self.entry.data.get(CONF_GROUP_NAME)
+                ): selector.TextSelector(),
+                vol.Required(
+                    CONF_GROUP_AREAS, default=self.entry.data.get(CONF_GROUP_AREAS, [])
+                ): selector.AreaSelector(selector.AreaSelectorConfig(multiple=True)),
+                vol.Required(
+                    CONF_GROUP_THRESHOLD,
+                    default=self.entry.data.get(
+                        CONF_GROUP_THRESHOLD, DEFAULT_GROUP_THRESHOLD
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
+                    )
                 ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(
-                    min=0, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
-                )
-            ),
-        }
-    )
+            }
+        )
 
-    return self.async_show_form(step_id="group_options", data_schema=schema)
+        return self.async_show_form(step_id="group_options", data_schema=schema)
 
-    
     async def async_step_room_options(
         self,
         user_input: dict[str, Any] | None = None,
