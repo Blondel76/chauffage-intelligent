@@ -27,9 +27,9 @@ CONF_HEATER_ENTITY = "Entité de chauffe (vanne ou interrupteur)"
 CONF_MODE_PLANNINGS = "mode_plannings"
 DEFAULT_PLANNING = "12:00|eco"
 
-CONF_GROUP_NAME = "group_name"
-CONF_GROUP_AREAS = "group_areas"
-CONF_GROUP_THRESHOLD = "group_threshold"
+CONF_GROUP_NAME = "Nom du groupe"
+CONF_GROUP_AREAS = "Pièces du groupe"
+CONF_GROUP_THRESHOLD = "Seuil de température (°C)"
 DEFAULT_GROUP_THRESHOLD = 0.2
 
 COEFFICIENT_MIN = 10.0
