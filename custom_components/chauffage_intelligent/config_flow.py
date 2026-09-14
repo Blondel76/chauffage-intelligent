@@ -124,7 +124,7 @@ def _central_schema(defaults: dict | None = None) -> vol.Schema:
             vol.Optional(
                 CONF_BOILER_ENTITY, default=defaults.get(CONF_BOILER_ENTITY)
             ): selector.EntitySelector(
-                selector.EntitySelectorConfig(domain=["switch"])
+                selector.EntitySelectorConfig(domain=["switch", "climate"])
             ),
         }
     )
