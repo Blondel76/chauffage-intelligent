@@ -11,6 +11,7 @@ from homeassistant.helpers.event import (
     async_track_time_change,
 )
 
+from .boiler import update_boiler_state
 from .calculations import get_float
 from .const import (
     CONF_AREA,
@@ -289,4 +290,6 @@ class ChauffageScheduler:
                 "climate",
                 "set_temperature",
                 {"entity_id": self.heater_entity, "temperature": temperature},
-        )
+            )
+
+        await update_boiler_state(self.hass)
