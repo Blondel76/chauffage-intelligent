@@ -3,6 +3,7 @@
   "name": "Chauffage Intelligent",
   "version": "1.0.0",
   "documentation": "https://github.com/Blondel76/chauffage-intelligent",
+  "issue_tracker": "https://github.com/Blondel76/chauffage-intelligent/issues",
   "codeowners": ["@Blondel76"],
   "config_flow": true,
   "integration_type": "hub",
