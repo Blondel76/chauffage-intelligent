@@ -13,6 +13,7 @@ from homeassistant.helpers import selector
 from .const import (
     CENTRAL_UNIQUE_ID,
     CONF_AREA,
+    CONF_BOILER_ENTITY,
     CONF_CLIMATE,
     CONF_DOOR_SENSOR,
     CONF_GROUP_AREAS,
@@ -61,16 +62,6 @@ def _get_central_modes(hass) -> list[str]:
 
     return list(state.attributes.get("options", []))
 
-def _get_room_options(hass) -> list[dict]:
-    """Return selectable options built from existing room entries (not raw HA areas)."""
-
-    options = []
-
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM:
-            options.append({"value": entry.data[CONF_AREA], "label": entry.title})
-
-    return options
 
 def _get_central_heating_type(hass) -> str:
     """Return the house's heating type, defaulting to gas."""
@@ -81,6 +72,18 @@ def _get_central_heating_type(hass) -> str:
         return HEATING_TYPE_GAS
 
     return central.data.get(CONF_HEATING_TYPE, HEATING_TYPE_GAS)
+
+
+def _get_room_options(hass) -> list[dict]:
+    """Return selectable options built from existing room entries (not raw HA areas)."""
+
+    options = []
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM:
+            options.append({"value": entry.data[CONF_AREA], "label": entry.title})
+
+    return options
 
 
 def _plannings_schema(modes: list[str], existing: dict[str, str]) -> vol.Schema:
@@ -94,6 +97,64 @@ def _plannings_schema(modes: list[str], existing: dict[str, str]) -> vol.Schema:
     }
 
     return vol.Schema(schema_dict)
+
+
+def _central_schema(defaults: dict | None = None) -> vol.Schema:
+    """Build the central config schema, optionally pre-filled for editing."""
+
+    defaults = defaults or {}
+
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_MODE_SELECTOR, default=defaults.get(CONF_MODE_SELECTOR)
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["input_select"])
+            ),
+            vol.Required(
+                CONF_HEATING_TYPE, default=defaults.get(CONF_HEATING_TYPE, HEATING_TYPE_GAS)
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": HEATING_TYPE_GAS, "label": "Gaz"},
+                        {"value": HEATING_TYPE_ELECTRIC, "label": "Électrique"},
+                    ]
+                )
+            ),
+            vol.Optional(
+                CONF_BOILER_ENTITY, default=defaults.get(CONF_BOILER_ENTITY)
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["switch"])
+            ),
+        }
+    )
+
+
+def _group_schema(room_options: list[dict], defaults: dict | None = None) -> vol.Schema:
+    """Build the group config schema, optionally pre-filled for editing."""
+
+    defaults = defaults or {}
+
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_GROUP_NAME, default=defaults.get(CONF_GROUP_NAME)
+            ): selector.TextSelector(),
+            vol.Required(
+                CONF_GROUP_AREAS, default=defaults.get(CONF_GROUP_AREAS, [])
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=room_options, multiple=True)
+            ),
+            vol.Required(
+                CONF_GROUP_THRESHOLD,
+                default=defaults.get(CONF_GROUP_THRESHOLD, DEFAULT_GROUP_THRESHOLD),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=0, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
+                )
+            ),
+        }
+    )
 
 
 class ChauffageIntelligentConfigFlow(
@@ -162,23 +223,7 @@ class ChauffageIntelligentConfigFlow(
                 data={**user_input, ENTRY_TYPE: ENTRY_TYPE_CENTRAL},
             )
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_MODE_SELECTOR): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["input_select"])
-                ),
-                vol.Required(CONF_HEATING_TYPE): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=[
-                            {"value": HEATING_TYPE_GAS, "label": "Gaz"},
-                            {"value": HEATING_TYPE_ELECTRIC, "label": "Électrique"},
-                        ]
-                    )
-                ),
-            }
-        )
-
-        return self.async_show_form(step_id="central", data_schema=schema)
+        return self.async_show_form(step_id="central", data_schema=_central_schema())
 
     async def async_step_group(
         self,
@@ -200,23 +245,9 @@ class ChauffageIntelligentConfigFlow(
                 data={**user_input, ENTRY_TYPE: ENTRY_TYPE_GROUP},
             )
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_GROUP_NAME): selector.TextSelector(),
-                vol.Required(CONF_GROUP_AREAS): selector.SelectSelector(
-                    selector.SelectSelectorConfig(options=room_options, multiple=True)
-                ),
-                vol.Required(
-                    CONF_GROUP_THRESHOLD, default=DEFAULT_GROUP_THRESHOLD
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
-                    )
-                ),
-            }
+        return self.async_show_form(
+            step_id="group", data_schema=_group_schema(room_options)
         )
-
-        return self.async_show_form(step_id="group", data_schema=schema)
 
     async def async_step_room(
         self,
@@ -327,36 +358,17 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Edit the central mode selector and heating type."""
+        """Edit the central mode selector, heating type, and boiler entity."""
 
         if user_input is not None:
             new_data = {**self.entry.data, **user_input}
             self.hass.config_entries.async_update_entry(self.entry, data=new_data)
             return self.async_create_entry(title="", data={})
 
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_MODE_SELECTOR,
-                    default=self.entry.data.get(CONF_MODE_SELECTOR),
-                ): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["input_select"])
-                ),
-                vol.Required(
-                    CONF_HEATING_TYPE,
-                    default=self.entry.data.get(CONF_HEATING_TYPE, HEATING_TYPE_GAS),
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=[
-                            {"value": HEATING_TYPE_GAS, "label": "Gaz"},
-                            {"value": HEATING_TYPE_ELECTRIC, "label": "Électrique"},
-                        ]
-                    )
-                ),
-            }
+        return self.async_show_form(
+            step_id="central_options",
+            data_schema=_central_schema(self.entry.data),
         )
-
-        return self.async_show_form(step_id="central_options", data_schema=schema)
 
     async def async_step_group_options(
         self,
@@ -371,30 +383,10 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
             self.hass.config_entries.async_update_entry(self.entry, data=new_data)
             return self.async_create_entry(title="", data={})
 
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_GROUP_NAME, default=self.entry.data.get(CONF_GROUP_NAME)
-                ): selector.TextSelector(),
-                vol.Required(
-                    CONF_GROUP_AREAS, default=self.entry.data.get(CONF_GROUP_AREAS, [])
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(options=room_options, multiple=True)
-                ),
-                vol.Required(
-                    CONF_GROUP_THRESHOLD,
-                    default=self.entry.data.get(
-                        CONF_GROUP_THRESHOLD, DEFAULT_GROUP_THRESHOLD
-                    ),
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=0, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
-                    )
-                ),
-            }
+        return self.async_show_form(
+            step_id="group_options",
+            data_schema=_group_schema(room_options, self.entry.data),
         )
-
-        return self.async_show_form(step_id="group_options", data_schema=schema)
 
     async def async_step_room_options(
         self,
