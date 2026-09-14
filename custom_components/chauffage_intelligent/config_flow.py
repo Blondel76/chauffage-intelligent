@@ -394,7 +394,7 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
             }
         )
 
-    return self.async_show_form(step_id="group_options", data_schema=schema)
+        return self.async_show_form(step_id="group_options", data_schema=schema)
 
     async def async_step_room_options(
         self,
