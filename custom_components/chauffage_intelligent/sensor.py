@@ -1,5 +1,7 @@
 """Sensor entities for Chauffage Intelligent."""
 
+from .security import compute_security_state
+
 from __future__ import annotations
 
 from homeassistant.components.sensor import (
