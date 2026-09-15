@@ -28,6 +28,11 @@ CONF_BOILER_ENTITY = "Chaudière (interrupteur ou climat, optionnel si chauffage
 CONF_MODE_PLANNINGS = "mode_plannings"
 DEFAULT_PLANNING = "12:00|eco"
 
+SECURITY_STATE_OFF = "gris"
+SECURITY_STATE_OK = "vert"
+SECURITY_STATE_WARNING = "orange"
+SECURITY_STATE_CRITICAL = "rouge"
+
 CONF_GROUP_NAME = "Nom du groupe"
 CONF_GROUP_AREAS = "Pièces du groupe"
 CONF_GROUP_THRESHOLD = "Seuil de température (°C)"
