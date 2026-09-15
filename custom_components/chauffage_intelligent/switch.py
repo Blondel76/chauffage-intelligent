@@ -8,7 +8,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import CONF_AREA, CONF_DOOR_SENSOR, DOMAIN, slugify_area
+from .const import (
+    CONF_AREA,
+    CONF_CLIMATE,
+    CONF_DOOR_SENSOR,
+    DOMAIN,
+    ENTRY_TYPE,
+    ENTRY_TYPE_CENTRAL,
+    ENTRY_TYPE_ROOM,
+    slugify_area,
+)
 
 
 async def async_setup_entry(
@@ -16,7 +25,11 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the window override switch, only if no real door sensor is configured."""
+    """Set up the master heating switch (central), or the window override switch (room)."""
+
+    if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_CENTRAL:
+        async_add_entities([ChauffageGeneralSwitch(entry)])
+        return
 
     if entry.data.get(CONF_DOOR_SENSOR):
         return
@@ -25,6 +38,67 @@ async def async_setup_entry(
     area_slug = slugify_area(area_name)
 
     async_add_entities([WindowOverrideSwitch(entry, area_slug)])
+
+
+class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
+    """Master switch: turns every room's climate heat mode on or off."""
+
+    _attr_icon = "mdi:radiator"
+    _attr_has_entity_name = True
+    _attr_name = "Chauffage général"
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        """Initialize."""
+
+        self._entry = entry
+
+        self._attr_unique_id = f"{entry.entry_id}_chauffage_general"
+        self.entity_id = "switch.chauffage_general"
+        self._attr_suggested_object_id = "chauffage_general"
+
+        self._attr_is_on = True
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the previous state and apply it immediately."""
+
+        await super().async_added_to_hass()
+
+        last_state = await self.async_get_last_state()
+
+        if last_state is not None:
+            self._attr_is_on = last_state.state == "on"
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Turn on: set every room's climate to heat mode."""
+
+        self._attr_is_on = True
+        self.async_write_ha_state()
+        await self._apply_to_all_rooms("heat")
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Turn off: set every room's climate to off."""
+
+        self._attr_is_on = False
+        self.async_write_ha_state()
+        await self._apply_to_all_rooms("off")
+
+    async def _apply_to_all_rooms(self, hvac_mode: str) -> None:
+        """Apply the given hvac_mode to every room's climate entity."""
+
+        for room_entry in self.hass.config_entries.async_entries(DOMAIN):
+            if room_entry.data.get(ENTRY_TYPE) != ENTRY_TYPE_ROOM:
+                continue
+
+            climate_entity = room_entry.data.get(CONF_CLIMATE)
+
+            if not climate_entity:
+                continue
+
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": climate_entity, "hvac_mode": hvac_mode},
+            )
 
 
 class WindowOverrideSwitch(RestoreEntity, SwitchEntity):
