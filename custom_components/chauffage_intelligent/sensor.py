@@ -266,3 +266,54 @@ class HeureAnticipeeSensor(ChauffageSensorBase):
             self._get_planning(),
             self._read_coefficient(),
         )
+
+from homeassistant.components.sensor import SensorEntity as _SensorEntityAlias  # déjà importé plus haut, pas de doublon nécessaire
+
+
+def _any_room_climate_active(hass: HomeAssistant) -> bool:
+    """Return True if at least one room's climate is not in hvac_mode off."""
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.data.get("entry_type") != "room":
+            continue
+
+        climate_entity = entry.data.get(CONF_CLIMATE)
+
+        if not climate_entity:
+            continue
+
+        state = hass.states.get(climate_entity)
+
+        if state is not None and state.state != "off":
+            return True
+
+    return False
+
+
+class SecuriteChauffageSensor(SensorEntity):
+    """House-wide heating safety status (gris/vert/orange/rouge)."""
+
+    _attr_icon = "mdi:shield-check"
+    _attr_has_entity_name = True
+    _attr_name = "Sécurité chauffage"
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        """Initialize."""
+
+        self._entry = entry
+
+        self._attr_unique_id = f"{entry.entry_id}_securite"
+        self.entity_id = "sensor.securite_chauffage"
+        self._attr_suggested_object_id = "securite_chauffage"
+
+    def update(self) -> None:
+        """Compute the current status.
+
+        No rules exist yet: for now this only distinguishes 'gris' (nothing
+        active) from 'vert' (at least one room's climate is on). Orange/rouge
+        will be added once the rule engine exists.
+        """
+
+        self._attr_native_value = (
+            "vert" if _any_room_climate_active(self.hass) else "gris"
+        )
