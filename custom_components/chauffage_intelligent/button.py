@@ -4,30 +4,29 @@ from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from .const import ENTRY_TYPE, ENTRY_TYPE_CENTRAL
+
+
+SECURITY_REARM_EVENT = "chauffage_intelligent_security_rearm"
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
+    hass,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the security reset button, only for the central entry."""
+    """Set up the security reset button."""
 
-    if entry.data.get("entry_type") != "central":
+    if entry.data.get(ENTRY_TYPE) != ENTRY_TYPE_CENTRAL:
         return
 
-    async_add_entities([SecuriteReearmementButton(entry)])
+    async_add_entities([SecuriteRearmementButton(entry)])
 
 
-class SecuriteReearmementButton(ButtonEntity):
-    """Reset button for the heating security status.
-
-    Currently a stub: no rule engine exists yet to latch a 'rouge' state,
-    so pressing this does nothing observable. It will be wired once the
-    security rules are built.
-    """
+class SecuriteRearmementButton(ButtonEntity):
+    """Button used to rearm the heating security."""
 
     _attr_icon = "mdi:refresh"
     _attr_has_entity_name = True
@@ -35,14 +34,17 @@ class SecuriteReearmementButton(ButtonEntity):
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize."""
-
         self._entry = entry
 
-        self._attr_unique_id = f"{entry.entry_id}_reearmement"
-        self.entity_id = "button.reearmement_securite_chauffage"
-        self._attr_suggested_object_id = "reearmement_securite_chauffage"
+        self._attr_unique_id = f"{entry.entry_id}_rearmement"
+        self.entity_id = "button.rearmement_securite_chauffage"
+        self._attr_suggested_object_id = "rearmement_securite_chauffage"
 
     async def async_press(self) -> None:
-        """Handle the button press (no-op for now)."""
-
-        return
+        """Request a security rearmement."""
+        self.hass.bus.async_fire(
+            SECURITY_REARM_EVENT,
+            {
+                "entry_id": self._entry.entry_id,
+            },
+        )
