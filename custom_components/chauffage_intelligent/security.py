@@ -20,6 +20,25 @@ from .const import (
 )
 
 
+def _climate_is_off(state) -> bool:
+    """Return True when a climate entity is effectively off.
+
+    Home Assistant does not always expose the HVAC off state as state.state == "off".
+    Some integrations use the `hvac_mode` attribute instead, so we check both.
+    """
+    if state is None:
+        return False
+
+    if state.state in ("off", "idle"):
+        return True
+
+    hvac_mode = state.attributes.get("hvac_mode")
+    if isinstance(hvac_mode, str) and hvac_mode.lower() in ("off", "idle"):
+        return True
+
+    return False
+
+
 def _get_room_entries(hass: HomeAssistant):
     """Récupère toutes les config entries correspondant à des pièces."""
     return [
@@ -54,8 +73,8 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
             if state is None or state.state in ("unknown", "unavailable"):
                 return False
 
-            # Thermostat éteint (mode HVAC 'off')
-            if state.domain == "climate" and state.state == "off":
+            # Thermostat éteint : check both state.state and hvac_mode attribute
+            if state.domain == "climate" and _climate_is_off(state):
                 return False
 
     return True
