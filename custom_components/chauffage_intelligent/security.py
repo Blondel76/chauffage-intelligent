@@ -21,15 +21,16 @@ from .const import (
 
 
 def _entity_is_off(state) -> bool:
-    """Return True when a configured heating entity is effectively off."""
+    """Return True when a configured heating entity is explicitly off."""
     if state is None:
         return False
 
-    # IMPORTANT: pour ton cas, le bon indicateur est state.state.
-    # hvac_mode n'est pas fiable ici, et idle ne doit pas déclencher la sécurité.
+    # Pour un climate, seul l'état explicite "off" déclenche le rouge.
+    # "idle" signifie que le thermostat est actif mais ne chauffe pas actuellement.
     if state.domain == "climate":
         return state.state == "off"
 
+    # Pour une vanne ou un chauffage électrique configuré comme switch.
     if state.domain == "switch":
         return state.state == "off"
 
@@ -37,7 +38,7 @@ def _entity_is_off(state) -> bool:
 
 
 def _get_room_entries(hass: HomeAssistant):
-    """Récupère toutes les config entries correspondant à des pièces."""
+    """Return all room configuration entries."""
     return [
         entry
         for entry in hass.config_entries.async_entries(DOMAIN)
@@ -46,7 +47,7 @@ def _get_room_entries(hass: HomeAssistant):
 
 
 def _all_critical_entities_available(hass: HomeAssistant) -> bool:
-    """Vérifie que les entités critiques sont disponibles et non éteintes."""
+    """Check that critical entities are available and switched on."""
     for entry in _get_room_entries(hass):
         config_data = {**entry.data, **entry.options}
 
@@ -65,7 +66,10 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
 
             state = hass.states.get(entity_id)
 
-            if state is None or state.state in ("unknown", "unavailable"):
+            if state is None:
+                return False
+
+            if state.state in ("unknown", "unavailable"):
                 return False
 
             if _entity_is_off(state):
@@ -80,13 +84,15 @@ def compute_security_state(
     current_state: str = SECURITY_STATE_OK,
     rearm_pressed: bool = False,
 ) -> str:
-    """Calculer l'état global de sécurité du chauffage avec réarmement manuel."""
+    """Calculate the global heating security state."""
     if not master_switch_on:
         return SECURITY_STATE_OFF
 
+    # Une panne reste prioritaire, même pendant une demande de réarmement.
     if not _all_critical_entities_available(hass):
         return SECURITY_STATE_CRITICAL
 
+    # Une alerte reste mémorisée jusqu'à une demande de réarmement.
     if current_state == SECURITY_STATE_CRITICAL and not rearm_pressed:
         return SECURITY_STATE_CRITICAL
 
