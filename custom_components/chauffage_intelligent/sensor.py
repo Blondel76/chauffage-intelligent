@@ -36,10 +36,10 @@ from .const import (
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
+    SECURITY_STATE_OK,
     slugify_area,
 )
 from .security import compute_security_state
-
 
 SECURITY_CHECK_INTERVAL = timedelta(seconds=5)
 
@@ -92,6 +92,9 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         self.entity_id = "sensor.securite_chauffage"
         self._attr_suggested_object_id = "securite_chauffage"
 
+        # Valeur par défaut pour éviter les erreurs de lecture à l'initialisation
+        self._attr_native_value = SECURITY_STATE_OK
+
     async def async_added_to_hass(self) -> None:
         """Restore state and start security monitoring."""
         await super().async_added_to_hass()
@@ -100,20 +103,20 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         if last_state is not None:
             self._attr_native_value = last_state.state
 
-        # Recalcul automatique toutes les 5 secondes.
+        # Recalcul automatique toutes les 5 secondes
         self._remove_periodic_listener = async_track_time_interval(
             self.hass,
             self._async_periodic_security_check,
             SECURITY_CHECK_INTERVAL,
         )
 
-        # Écoute du bouton de réarmement.
+        # Écoute de l'événement de réarmement
         self._remove_rearm_listener = self.hass.bus.async_listen(
             SECURITY_REARM_EVENT,
             self._handle_rearm,
         )
 
-        # Calcul immédiat au démarrage.
+        # Premier calcul au démarrage
         self._async_periodic_security_check()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -138,12 +141,10 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         switch_state = self.hass.states.get("switch.chauffage_general")
         master_on = switch_state is not None and switch_state.state == "on"
 
-        # Le système repasse au vert uniquement si toutes les entités
-        # critiques sont redevenues disponibles et actives.
         self._attr_native_value = compute_security_state(
             hass=self.hass,
             master_switch_on=master_on,
-            current_state=self._attr_native_value,
+            current_state=getattr(self, "_attr_native_value", SECURITY_STATE_OK),
             rearm_pressed=True,
         )
 
@@ -154,11 +155,12 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         switch_state = self.hass.states.get("switch.chauffage_general")
         master_on = switch_state is not None and switch_state.state == "on"
 
-        # Le réarmement n'est pas demandé pendant les contrôles périodiques.
+        current_val = getattr(self, "_attr_native_value", SECURITY_STATE_OK)
+
         self._attr_native_value = compute_security_state(
             hass=self.hass,
             master_switch_on=master_on,
-            current_state=self._attr_native_value,
+            current_state=current_val,
             rearm_pressed=False,
         )
 
