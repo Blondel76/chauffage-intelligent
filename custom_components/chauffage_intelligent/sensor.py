@@ -224,4 +224,88 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
         self,
         event: Event[EventStateChangedData],
     ) -> None:
-        """Recalculate the
+        """Recalculate the derivative when the interior temperature updates."""
+
+        new_state = event.data.get("new_state")
+
+        if new_state is None:
+            return
+
+        try:
+            temp = float(new_state.state)
+        except (ValueError, TypeError):
+            return
+
+        now = dt_util.utcnow()
+
+        if self._reference_time is None:
+            self._reference_time = now
+            self._reference_temp = temp
+            return
+
+        delta_minutes = (now - self._reference_time).total_seconds() / 60
+
+        if delta_minutes < DERIVE_INTERVAL_MINUTES:
+            return
+
+        self._attr_native_value = round((temp - self._reference_temp) / delta_minutes, 3)
+
+        self._reference_time = now
+        self._reference_temp = temp
+
+        self.async_write_ha_state()
+
+
+class HeurePlanningSensor(ChauffageSensorBase):
+    """Next planning sensor."""
+
+    _attr_icon = "mdi:clock-outline"
+
+    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
+        """Initialize."""
+
+        super().__init__(entry, area_slug, "heure_planning", "Heure planning")
+
+    def update(self) -> None:
+        """Update."""
+
+        self._attr_native_value = get_next_schedule(self._get_planning())
+
+
+class HeurePlanningPrecedentSensor(ChauffageSensorBase):
+    """Previous planning sensor."""
+
+    _attr_icon = "mdi:clock-check-outline"
+
+    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
+        """Initialize."""
+
+        super().__init__(
+            entry, area_slug, "heure_planning_precedent", "Heure planning précédent"
+        )
+
+    def update(self) -> None:
+        """Update."""
+
+        self._attr_native_value = get_previous_schedule(self._get_planning())
+
+
+class HeureAnticipeeSensor(ChauffageSensorBase):
+    """Anticipated heating time."""
+
+    _attr_icon = "mdi:clock-start"
+
+    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
+        """Initialize."""
+
+        super().__init__(entry, area_slug, "heure_anticipee", "Heure anticipée")
+
+    def update(self) -> None:
+        """Update."""
+
+        self._attr_native_value = calculate_anticipated_time(
+            self.hass,
+            self._entry.data,
+            self._get_planning(),
+            self._read_coefficient(),
+        )
