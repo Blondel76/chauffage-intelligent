@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
 
+"""récupères les constantes du fichier const.py que tu m'as montré précédemment"""
 from .const import (
     CONF_CLIMATE,
     CONF_TEMP_INT,
@@ -17,20 +18,20 @@ from .const import (
 
 
 def _get_room_entries(hass: HomeAssistant):
-    """Return all room config entries."""
+    """Récupère toutes les config entries correspondant à des pièces"""
 
     return [
         entry
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM
+        for entry in hass.config_entries.async_entries(DOMAIN) """demande à Home Assistant : Donne-moi toutes les entrées de configuration de mon intégration chauffage_intelligent"""
+        if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM """ne conserve que celles dont c'est des pièces """
     ]
 
 
 def _all_critical_entities_available(hass: HomeAssistant) -> bool:
-    """Check that every room's climate and interior temperature sensor are available."""
+    """Cette fonction répond à une question très simple : Est-ce que toutes les entités critiques de toutes les pièces sont disponibles ?"""
 
     for entry in _get_room_entries(hass):
-        for key in (CONF_CLIMATE, CONF_TEMP_INT):
+        for key in (CONF_CLIMATE, CONF_TEMP_INT, CONF_TEMP_EXT, CONF_HEATER_ENTITY, CONF_BOILER_ENTITY, CONF_DOOR_SENSOR): """entitésqui doivent être vérifier"""
             entity_id = entry.data.get(key)
 
             if not entity_id:
@@ -45,13 +46,11 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
 
 
 def compute_security_state(hass: HomeAssistant, master_switch_on: bool) -> str:
-    """Compute the overall heating security state (gris/vert/orange/rouge).
+    """Calculer l'état global de sécurité du chauffage (gris/vert/orange/rouge).
 
-    Rule 1 (this is the only rule for now): gris if the master switch is
-    off; vert if it's on and every room's climate + interior temperature
-    sensor are available; rouge if it's on but something is missing.
-    More rules (orange, other components) will be added here later.
-    """
+    Règle 1 : gris si le commutateur maître est désactivé ; 
+    vert s'il est allumé et les enties de chaque pièce sont disponibles ;
+    rouge s'il est allumé mais il manque quelque chose."""
 
     if not master_switch_on:
         return SECURITY_STATE_OFF
