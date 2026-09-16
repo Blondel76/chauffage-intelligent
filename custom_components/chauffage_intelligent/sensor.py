@@ -66,7 +66,7 @@ async def async_setup_entry(
 # ==========================================================
 
 
-class SecuriteChauffageSensor(SensorEntity):
+class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
     """House-wide heating safety status."""
 
     _attr_icon = "mdi:shield-check"
@@ -82,14 +82,31 @@ class SecuriteChauffageSensor(SensorEntity):
         self.entity_id = "sensor.securite_chauffage"
         self._attr_suggested_object_id = "securite_chauffage"
 
+    async def async_added_to_hass(self) -> None:
+        """Restore previous state on startup."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state:
+            self._attr_native_value = last_state.state
+
     def update(self) -> None:
         """Compute the current status using the security rules module."""
 
+        # 1. État du commutateur maître
         switch_state = self.hass.states.get("switch.chauffage_general")
         master_on = switch_state is not None and switch_state.state == "on"
 
-        self._attr_native_value = compute_security_state(self.hass, master_on)
+        # 2. État du bouton de réarmement
+        rearm_state = self.hass.states.get("button.rearmement_securite_chauffage")
+        rearm_pressed = rearm_state is not None and rearm_state.state == "on"
 
+        # 3. Calcul du nouvel état avec maintien de l'alerte
+        self._attr_native_value = compute_security_state(
+            hass=self.hass,
+            master_switch_on=master_on,
+            current_state=self._attr_native_value,
+            rearm_pressed=rearm_pressed,
+        )
 
 # ==========================================================
 # PIECE
