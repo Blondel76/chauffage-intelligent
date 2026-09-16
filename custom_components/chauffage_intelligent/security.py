@@ -25,7 +25,8 @@ def _entity_is_off(state) -> bool:
     if state is None:
         return False
 
-    # Pour ton cas, le bon indicateur est state.state, pas hvac_mode.
+    # IMPORTANT: pour ton cas, le bon indicateur est state.state.
+    # hvac_mode n'est pas fiable ici, et idle ne doit pas déclencher la sécurité.
     if state.domain == "climate":
         return state.state == "off"
 
@@ -67,8 +68,6 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
             if state is None or state.state in ("unknown", "unavailable"):
                 return False
 
-            # Si le climate est OFF, ou une vanne/interrupteur est OFF :
-            # la sécurité devient critique.
             if _entity_is_off(state):
                 return False
 
