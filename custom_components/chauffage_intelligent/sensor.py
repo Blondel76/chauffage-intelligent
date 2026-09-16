@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -19,6 +19,7 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
+from .button import SECURITY_REARM_EVENT
 from .calculations import (
     calculate_anticipated_time,
     calculate_heating_time,
@@ -35,10 +36,10 @@ from .const import (
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
-    ENTRY_TYPE_ROOM,
     slugify_area,
 )
 from .security import compute_security_state
+
 
 SECURITY_CHECK_INTERVAL = timedelta(seconds=5)
 
@@ -69,12 +70,12 @@ async def async_setup_entry(
 
 
 # ==========================================================
-# SECURITE (config centrale)
+# SECURITE
 # ==========================================================
 
 
 class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
-    """House-wide heating safety status."""
+    """House-wide heating security status."""
 
     _attr_icon = "mdi:shield-check"
     _attr_has_entity_name = True
@@ -85,51 +86,80 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         """Initialize."""
         self._entry = entry
         self._remove_periodic_listener = None
+        self._remove_rearm_listener = None
 
         self._attr_unique_id = f"{entry.entry_id}_securite"
         self.entity_id = "sensor.securite_chauffage"
         self._attr_suggested_object_id = "securite_chauffage"
 
     async def async_added_to_hass(self) -> None:
-        """Restore previous state and start periodic security checks."""
+        """Restore state and start security monitoring."""
         await super().async_added_to_hass()
+
         last_state = await self.async_get_last_state()
-        if last_state:
+        if last_state is not None:
             self._attr_native_value = last_state.state
 
+        # Recalcul automatique toutes les 5 secondes.
         self._remove_periodic_listener = async_track_time_interval(
             self.hass,
             self._async_periodic_security_check,
             SECURITY_CHECK_INTERVAL,
         )
 
+        # Écoute du bouton de réarmement.
+        self._remove_rearm_listener = self.hass.bus.async_listen(
+            SECURITY_REARM_EVENT,
+            self._handle_rearm,
+        )
+
+        # Calcul immédiat au démarrage.
         self._async_periodic_security_check()
 
     async def async_will_remove_from_hass(self) -> None:
-        """Stop periodic security checks."""
+        """Stop all security listeners."""
         if self._remove_periodic_listener is not None:
             self._remove_periodic_listener()
             self._remove_periodic_listener = None
+
+        if self._remove_rearm_listener is not None:
+            self._remove_rearm_listener()
+            self._remove_rearm_listener = None
+
         await super().async_will_remove_from_hass()
 
     def _async_periodic_security_check(self, _now=None) -> None:
-        """Recalculate and publish the security state."""
+        """Recalculate the security state every five seconds."""
         self.update()
         self.async_write_ha_state()
 
-    def update(self) -> None:
-        """Compute the current status using the security rules module."""
+    async def _handle_rearm(self, event) -> None:
+        """Rearm the security if all problems have disappeared."""
         switch_state = self.hass.states.get("switch.chauffage_general")
         master_on = switch_state is not None and switch_state.state == "on"
 
-        rearm_state = self.hass.states.get("button.rearmement_securite_chauffage")
-        rearm_pressed = rearm_state is not None and rearm_state.state == "on"
-
+        # Le système repasse au vert uniquement si toutes les entités
+        # critiques sont redevenues disponibles et actives.
         self._attr_native_value = compute_security_state(
             hass=self.hass,
             master_switch_on=master_on,
             current_state=self._attr_native_value,
-            rearm_pressed=rearm_pressed,
+            rearm_pressed=True,
+        )
+
+        self.async_write_ha_state()
+
+    def update(self) -> None:
+        """Compute the current security state."""
+        switch_state = self.hass.states.get("switch.chauffage_general")
+        master_on = switch_state is not None and switch_state.state == "on"
+
+        # Le réarmement n'est pas demandé pendant les contrôles périodiques.
+        self._attr_native_value = compute_security_state(
+            hass=self.hass,
+            master_switch_on=master_on,
+            current_state=self._attr_native_value,
+            rearm_pressed=False,
         )
 
 
@@ -149,7 +179,6 @@ class ChauffageSensorBase(SensorEntity):
         name: str,
     ) -> None:
         """Initialize."""
-
         self._entry = entry
         self._area_slug = area_slug
 
@@ -175,7 +204,7 @@ class ChauffageSensorBase(SensorEntity):
         }
 
     def _read_coefficient(self) -> float:
-        """Read the current coefficient number entity, with fallback."""
+        """Read the current coefficient number entity."""
         coefficient_entity = f"number.coefficient_{self._area_slug}"
         coefficient_state = self.hass.states.get(coefficient_entity)
 
@@ -188,7 +217,7 @@ class ChauffageSensorBase(SensorEntity):
         return COEFFICIENT_DEFAULT
 
     def _get_planning(self) -> str:
-        """Fetch the currently resolved planning string for this room."""
+        """Fetch the currently resolved planning string."""
         data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
         resolver = data.get("resolver")
 
@@ -220,7 +249,7 @@ class TempsDeChauffeSensor(ChauffageSensorBase):
 
 
 class DeriveSensor(RestoreEntity, ChauffageSensorBase):
-    """Derivative sensor, computed internally from the interior temperature."""
+    """Derivative sensor."""
 
     _attr_icon = "mdi:chart-line"
     _attr_native_unit_of_measurement = "°C/min"
@@ -279,7 +308,10 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
         if delta_minutes < DERIVE_INTERVAL_MINUTES:
             return
 
-        self._attr_native_value = round((temp - self._reference_temp) / delta_minutes, 3)
+        self._attr_native_value = round(
+            (temp - self._reference_temp) / delta_minutes,
+            3,
+        )
 
         self._reference_time = now
         self._reference_temp = temp
@@ -288,7 +320,7 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
 
 
 class HeurePlanningSensor(ChauffageSensorBase):
-    """Next planning sensor."""
+    """Next schedule sensor."""
 
     _attr_icon = "mdi:clock-outline"
 
@@ -302,14 +334,17 @@ class HeurePlanningSensor(ChauffageSensorBase):
 
 
 class HeurePlanningPrecedentSensor(ChauffageSensorBase):
-    """Previous planning sensor."""
+    """Previous schedule sensor."""
 
     _attr_icon = "mdi:clock-check-outline"
 
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
         super().__init__(
-            entry, area_slug, "heure_planning_precedent", "Heure planning precedent"
+            entry,
+            area_slug,
+            "heure_planning_precedent",
+            "Heure planning precedent",
         )
 
     def update(self) -> None:
