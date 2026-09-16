@@ -30,7 +30,7 @@ def _get_room_entries(hass: HomeAssistant):
 
 
 def _all_critical_entities_available(hass: HomeAssistant) -> bool:
-    """Regle 1 : Vérifie que les entités critiques sont disponibles et non éteintes."""
+    """Vérifie que les entités critiques sont disponibles et non éteintes."""
     for entry in _get_room_entries(hass):
         for key in (
             CONF_CLIMATE,
@@ -47,23 +47,29 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
 
             state = hass.states.get(entity_id)
 
-            # Entité inexistante ou indisponible
             if state is None or state.state in ("unknown", "unavailable"):
                 return False
 
-            # Thermostat éteint manuellement
             if key == CONF_CLIMATE and state.state == "off":
                 return False
 
     return True
 
 
-def compute_security_state(hass: HomeAssistant, master_switch_on: bool) -> str:
-    """Calculer l'état global de sécurité du chauffage (gris/vert/rouge)."""
+def compute_security_state(
+    hass: HomeAssistant,
+    master_switch_on: bool,
+    current_state: str = SECURITY_STATE_OK,
+    rearm_pressed: bool = False,
+) -> str:
+    """Calculer l'état global de sécurité du chauffage avec réarmement manuel."""
     if not master_switch_on:
         return SECURITY_STATE_OFF
 
-    if _all_critical_entities_available(hass):
-        return SECURITY_STATE_OK
+    if not _all_critical_entities_available(hass):
+        return SECURITY_STATE_CRITICAL
 
-    return SECURITY_STATE_CRITICAL
+    if current_state == SECURITY_STATE_CRITICAL and not rearm_pressed:
+        return SECURITY_STATE_CRITICAL
+
+    return SECURITY_STATE_OK
