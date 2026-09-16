@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from homeassistant.core import HomeAssistant
 
 from .const import (
@@ -19,22 +20,30 @@ from .const import (
     SECURITY_STATE_OK,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 
 def _get_room_entries(hass: HomeAssistant):
     """Récupère toutes les config entries correspondant à des pièces."""
+    all_entries = hass.config_entries.async_entries(DOMAIN)
     room_entries = []
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        # On fusionne data et options pour être sûr de trouver le type d'entrée
+    
+    for entry in all_entries:
         config = {**entry.data, **entry.options}
         if config.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM:
             room_entries.append(entry)
+
+    if not room_entries:
+        _LOGGER.warning("[Sécurité] Aucune pièce trouvée dans les config entries !")
+
     return room_entries
 
 
 def _all_critical_entities_available(hass: HomeAssistant) -> bool:
     """Vérifie que toutes les entités critiques sont disponibles et actives."""
-    for entry in _get_room_entries(hass):
-        # Fusion des données initiales et des options modifiées
+    rooms = _get_room_entries(hass)
+
+    for entry in rooms:
         config = {**entry.data, **entry.options}
 
         for key in (
@@ -52,12 +61,16 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
 
             state = hass.states.get(entity_id)
 
-            # Entité absente, non disponible ou inconnue
-            if state is None or state.state in ("unknown", "unavailable"):
+            if state is None:
+                _LOGGER.warning("[Sécurité] Entité introuvable dans HA : %s", entity_id)
                 return False
 
-            # Thermostat éteint
+            if state.state in ("unknown", "unavailable"):
+                _LOGGER.warning("[Sécurité] Entité indisponible : %s (état: %s)", entity_id, state.state)
+                return False
+
             if key == CONF_CLIMATE and state.state == "off":
+                _LOGGER.warning("[Sécurité] Thermostat éteint détecté : %s", entity_id)
                 return False
 
     return True
@@ -70,17 +83,13 @@ def compute_security_state(
     rearm_pressed: bool = False,
 ) -> str:
     """Calculer l'état global de sécurité du chauffage avec auto-maintien."""
-    # 1. Si le commutateur maître est éteint
     if not master_switch_on:
         return SECURITY_STATE_OFF
 
-    # 2. Si une entité est indisponible ou un thermostat est off
     if not _all_critical_entities_available(hass):
         return SECURITY_STATE_CRITICAL
 
-    # 3. Verrouillage : si on était en rouge et sans réarmement, on reste en rouge
     if current_state == SECURITY_STATE_CRITICAL and not rearm_pressed:
         return SECURITY_STATE_CRITICAL
 
-    # 4. Tout est conforme
     return SECURITY_STATE_OK
