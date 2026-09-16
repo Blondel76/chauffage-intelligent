@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -10,7 +12,10 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
@@ -34,6 +39,11 @@ from .const import (
     slugify_area,
 )
 from .security import compute_security_state
+
+
+# La sécurité doit être recalculée périodiquement, même si Home Assistant
+# n'envoie pas d'événement de changement d'état pour le thermostat.
+SECURITY_CHECK_INTERVAL = timedelta(seconds=5)
 
 
 async def async_setup_entry(
@@ -72,22 +82,47 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
     _attr_icon = "mdi:shield-check"
     _attr_has_entity_name = True
     _attr_name = "Securite chauffage"
+    _attr_should_poll = False
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize."""
 
         self._entry = entry
+        self._remove_periodic_listener = None
 
         self._attr_unique_id = f"{entry.entry_id}_securite"
         self.entity_id = "sensor.securite_chauffage"
         self._attr_suggested_object_id = "securite_chauffage"
 
     async def async_added_to_hass(self) -> None:
-        """Restore previous state on startup."""
+        """Restore previous state and start periodic security checks."""
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
         if last_state:
             self._attr_native_value = last_state.state
+
+        # Ne pas dépendre uniquement des événements d'état : certains
+        # thermostats/intégrations ne signalent pas toujours correctement
+        # le passage à off. Le contrôle est donc répété régulièrement.
+        self._remove_periodic_listener = async_track_time_interval(
+            self.hass,
+            self._async_periodic_security_check,
+            SECURITY_CHECK_INTERVAL,
+        )
+
+        self._async_periodic_security_check()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop periodic security checks."""
+        if self._remove_periodic_listener is not None:
+            self._remove_periodic_listener()
+            self._remove_periodic_listener = None
+        await super().async_will_remove_from_hass()
+
+    def _async_periodic_security_check(self, _now=None) -> None:
+        """Recalculate and publish the security state."""
+        self.update()
+        self.async_write_ha_state()
 
     def update(self) -> None:
         """Compute the current status using the security rules module."""
@@ -107,6 +142,7 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
             current_state=self._attr_native_value,
             rearm_pressed=rearm_pressed,
         )
+
 
 # ==========================================================
 # PIECE
@@ -287,7 +323,7 @@ class HeurePlanningSensor(ChauffageSensorBase):
 
 
 class HeurePlanningPrecedentSensor(ChauffageSensorBase):
-    """Previous planning sensor."""
+    """Previous schedule sensor."""
 
     _attr_icon = "mdi:clock-check-outline"
 
