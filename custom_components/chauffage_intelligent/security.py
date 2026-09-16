@@ -25,10 +25,11 @@ def _entity_is_off(state) -> bool:
     if state is None:
         return False
 
-    # Pour un climate, seul l'état explicite "off" déclenche le rouge.
-    # "idle" signifie que le thermostat est actif mais ne chauffe pas actuellement.
+    # Certaines intégrations climate exposent le mode HVAC dans l'état,
+    # d'autres le recopient également dans l'attribut hvac_mode. Vérifier les
+    # deux permet de détecter aussi l'arrêt manuel du thermostat.
     if state.domain == "climate":
-        return state.state == "off"
+        return state.state == "off" or state.attributes.get("hvac_mode") == "off"
 
     # Pour une vanne ou un chauffage électrique configuré comme switch.
     if state.domain == "switch":
