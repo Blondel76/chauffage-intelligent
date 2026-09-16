@@ -62,16 +62,16 @@ async def async_setup_entry(
 
 
 # ==========================================================
-# SÉCURITÉ (config centrale)
+# SECURITE (config centrale)
 # ==========================================================
 
 
 class SecuriteChauffageSensor(SensorEntity):
-    """House-wide heating safety status (gris/vert/orange/rouge)."""
+    """House-wide heating safety status."""
 
     _attr_icon = "mdi:shield-check"
     _attr_has_entity_name = True
-    _attr_name = "Sécurité chauffage"
+    _attr_name = "Securite chauffage"
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize."""
@@ -92,7 +92,7 @@ class SecuriteChauffageSensor(SensorEntity):
 
 
 # ==========================================================
-# PIÈCE
+# PIECE
 # ==========================================================
 
 
@@ -192,7 +192,7 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
 
-        super().__init__(entry, area_slug, "derive", "Dérive")
+        super().__init__(entry, area_slug, "derive", "Derive")
 
         self._attr_native_value = 0
         self._reference_time = None
@@ -220,11 +220,8 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
             self._remove_listener()
             self._remove_listener = None
 
-    async def _handle_temp_change(
-        self,
-        event: Event[EventStateChangedData],
-    ) -> None:
-        """Recalculate the derivative when the interior temperature updates."""
+    async def _handle_temp_change(self, event) -> None:
+        """React to a new interior temperature reading."""
 
         new_state = event.data.get("new_state")
 
@@ -281,7 +278,7 @@ class HeurePlanningPrecedentSensor(ChauffageSensorBase):
         """Initialize."""
 
         super().__init__(
-            entry, area_slug, "heure_planning_precedent", "Heure planning précédent"
+            entry, area_slug, "heure_planning_precedent", "Heure planning precedent"
         )
 
     def update(self) -> None:
@@ -298,7 +295,7 @@ class HeureAnticipeeSensor(ChauffageSensorBase):
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
 
-        super().__init__(entry, area_slug, "heure_anticipee", "Heure anticipée")
+        super().__init__(entry, area_slug, "heure_anticipee", "Heure anticipee")
 
     def update(self) -> None:
         """Update."""
