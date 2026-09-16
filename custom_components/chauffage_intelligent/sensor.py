@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -115,7 +115,7 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
             SECURITY_CHECK_INTERVAL,
         )
 
-        # Calcul initial sans forcer l'écriture d'état immédiate dans le bus
+        # Calcul initial de l'état interne
         self._update_state(rearm_pressed=False)
 
     async def async_will_remove_from_hass(self) -> None:
@@ -130,8 +130,9 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
 
         await super().async_will_remove_from_hass()
 
+    @callback
     def _update_state(self, rearm_pressed: bool = False) -> None:
-        """Calcule et met à jour la valeur interne sans écrire dans HA."""
+        """Calcule et met à jour la valeur interne sans écrire sur le bus."""
         switch_state = self.hass.states.get("switch.chauffage_general")
         master_on = switch_state is not None and switch_state.state == "on"
 
@@ -144,12 +145,14 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
             rearm_pressed=rearm_pressed,
         )
 
-    async def _async_periodic_security_check(self, _now=None) -> None:
+    @callback
+    def _async_periodic_security_check(self, _now=None) -> None:
         """Recalcul périodique de l'état de sécurité."""
         self._update_state(rearm_pressed=False)
         self.async_write_ha_state()
 
-    async def _handle_rearm(self, event) -> None:
+    @callback
+    def _handle_rearm(self, event: Event) -> None:
         """Réarmement manuel déclenché par l'événement."""
         self._update_state(rearm_pressed=True)
         self.async_write_ha_state()
@@ -280,7 +283,8 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
             self._remove_listener()
             self._remove_listener = None
 
-    async def _handle_temp_change(self, event) -> None:
+    @callback
+    def _handle_temp_change(self, event: Event) -> None:
         """React to a new interior temperature reading."""
         new_state = event.data.get("new_state")
 
