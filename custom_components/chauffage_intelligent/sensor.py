@@ -92,7 +92,6 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         self.entity_id = "sensor.securite_chauffage"
         self._attr_suggested_object_id = "securite_chauffage"
 
-        # Valeur par défaut pour éviter les erreurs de lecture à l'initialisation
         self._attr_native_value = SECURITY_STATE_OK
 
     async def async_added_to_hass(self) -> None:
@@ -103,6 +102,12 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         if last_state is not None:
             self._attr_native_value = last_state.state
 
+        # Écoute de l'événement de réarmement
+        self._remove_rearm_listener = self.hass.bus.async_listen(
+            SECURITY_REARM_EVENT,
+            self._handle_rearm,
+        )
+
         # Recalcul automatique toutes les 5 secondes
         self._remove_periodic_listener = async_track_time_interval(
             self.hass,
@@ -110,14 +115,8 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
             SECURITY_CHECK_INTERVAL,
         )
 
-        # Écoute de l'événement de réarmement
-        self._remove_rearm_listener = self.hass.bus.async_listen(
-            SECURITY_REARM_EVENT,
-            self._handle_rearm,
-        )
-
-        # Premier calcul au démarrage
-        self._async_periodic_security_check()
+        # Calcul initial sans forcer l'écriture d'état immédiate dans le bus
+        self._update_state(rearm_pressed=False)
 
     async def async_will_remove_from_hass(self) -> None:
         """Stop all security listeners."""
@@ -131,27 +130,8 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
 
         await super().async_will_remove_from_hass()
 
-    def _async_periodic_security_check(self, _now=None) -> None:
-        """Recalculate the security state every five seconds."""
-        self.update()
-        self.async_write_ha_state()
-
-    async def _handle_rearm(self, event) -> None:
-        """Rearm the security if all problems have disappeared."""
-        switch_state = self.hass.states.get("switch.chauffage_general")
-        master_on = switch_state is not None and switch_state.state == "on"
-
-        self._attr_native_value = compute_security_state(
-            hass=self.hass,
-            master_switch_on=master_on,
-            current_state=getattr(self, "_attr_native_value", SECURITY_STATE_OK),
-            rearm_pressed=True,
-        )
-
-        self.async_write_ha_state()
-
-    def update(self) -> None:
-        """Compute the current security state."""
+    def _update_state(self, rearm_pressed: bool = False) -> None:
+        """Calcule et met à jour la valeur interne sans écrire dans HA."""
         switch_state = self.hass.states.get("switch.chauffage_general")
         master_on = switch_state is not None and switch_state.state == "on"
 
@@ -161,8 +141,22 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
             hass=self.hass,
             master_switch_on=master_on,
             current_state=current_val,
-            rearm_pressed=False,
+            rearm_pressed=rearm_pressed,
         )
+
+    async def _async_periodic_security_check(self, _now=None) -> None:
+        """Recalcul périodique de l'état de sécurité."""
+        self._update_state(rearm_pressed=False)
+        self.async_write_ha_state()
+
+    async def _handle_rearm(self, event) -> None:
+        """Réarmement manuel déclenché par l'événement."""
+        self._update_state(rearm_pressed=True)
+        self.async_write_ha_state()
+
+    async def async_update(self) -> None:
+        """Mise à jour asynchrone standard."""
+        self._update_state(rearm_pressed=False)
 
 
 # ==========================================================
