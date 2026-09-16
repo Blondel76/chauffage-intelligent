@@ -21,22 +21,14 @@ from .const import (
 
 
 def _entity_is_off(state) -> bool:
-    """Return True when a configured heating entity is switched off."""
+    """Return True when a configured heating entity is effectively off."""
     if state is None:
         return False
 
-    # For a climate, only an explicit OFF mode is considered switched off.
-    # IDLE means that the thermostat is active but is not heating at this
-    # moment, so it must not trigger the security alarm.
+    # Pour ton cas, le bon indicateur est state.state, pas hvac_mode.
     if state.domain == "climate":
-        if state.state == "off":
-            return True
+        return state.state == "off"
 
-        hvac_mode = state.attributes.get("hvac_mode")
-        return isinstance(hvac_mode, str) and hvac_mode.lower() == "off"
-
-    # A valve or an electric heater configured as a switch is off when its
-    # switch state is explicitly off.
     if state.domain == "switch":
         return state.state == "off"
 
@@ -55,7 +47,6 @@ def _get_room_entries(hass: HomeAssistant):
 def _all_critical_entities_available(hass: HomeAssistant) -> bool:
     """Vérifie que les entités critiques sont disponibles et non éteintes."""
     for entry in _get_room_entries(hass):
-        # Fusionne data et options au cas où la configuration soit dans options
         config_data = {**entry.data, **entry.options}
 
         for key in (
@@ -73,12 +64,11 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
 
             state = hass.states.get(entity_id)
 
-            # Entité non trouvée ou indisponible
             if state is None or state.state in ("unknown", "unavailable"):
                 return False
 
-            # Thermostat explicitement off, vanne off ou interrupteur
-            # électrique off : la sécurité devient critique.
+            # Si le climate est OFF, ou une vanne/interrupteur est OFF :
+            # la sécurité devient critique.
             if _entity_is_off(state):
                 return False
 
@@ -101,4 +91,4 @@ def compute_security_state(
     if current_state == SECURITY_STATE_CRITICAL and not rearm_pressed:
         return SECURITY_STATE_CRITICAL
 
-    return SECURITY_STATE_Ok
+    return SECURITY_STATE_OK
