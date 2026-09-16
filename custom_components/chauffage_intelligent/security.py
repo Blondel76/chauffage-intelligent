@@ -101,4 +101,4 @@ def compute_security_state(
     if current_state == SECURITY_STATE_CRITICAL and not rearm_pressed:
         return SECURITY_STATE_CRITICAL
 
-    return SECURITY_STATE_OK
+    return SECURITY_STATE_Ok
