@@ -20,21 +20,25 @@ from .const import (
 )
 
 
-def _climate_is_off(state) -> bool:
-    """Return True when a climate entity is effectively off.
-
-    Home Assistant does not always expose the HVAC off state as state.state == "off".
-    Some integrations use the `hvac_mode` attribute instead, so we check both.
-    """
+def _entity_is_off(state) -> bool:
+    """Return True when a configured heating entity is switched off."""
     if state is None:
         return False
 
-    if state.state in ("off", "idle"):
-        return True
+    # For a climate, only an explicit OFF mode is considered switched off.
+    # IDLE means that the thermostat is active but is not heating at this
+    # moment, so it must not trigger the security alarm.
+    if state.domain == "climate":
+        if state.state == "off":
+            return True
 
-    hvac_mode = state.attributes.get("hvac_mode")
-    if isinstance(hvac_mode, str) and hvac_mode.lower() in ("off", "idle"):
-        return True
+        hvac_mode = state.attributes.get("hvac_mode")
+        return isinstance(hvac_mode, str) and hvac_mode.lower() == "off"
+
+    # A valve or an electric heater configured as a switch is off when its
+    # switch state is explicitly off.
+    if state.domain == "switch":
+        return state.state == "off"
 
     return False
 
@@ -73,8 +77,9 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
             if state is None or state.state in ("unknown", "unavailable"):
                 return False
 
-            # Thermostat éteint : check both state.state and hvac_mode attribute
-            if state.domain == "climate" and _climate_is_off(state):
+            # Thermostat explicitement off, vanne off ou interrupteur
+            # électrique off : la sécurité devient critique.
+            if _entity_is_off(state):
                 return False
 
     return True
