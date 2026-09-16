@@ -40,9 +40,6 @@ from .const import (
 )
 from .security import compute_security_state
 
-
-# La sécurité doit être recalculée périodiquement, même si Home Assistant
-# n'envoie pas d'événement de changement d'état pour le thermostat.
 SECURITY_CHECK_INTERVAL = timedelta(seconds=5)
 
 
@@ -86,7 +83,6 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize."""
-
         self._entry = entry
         self._remove_periodic_listener = None
 
@@ -101,9 +97,6 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         if last_state:
             self._attr_native_value = last_state.state
 
-        # Ne pas dépendre uniquement des événements d'état : certains
-        # thermostats/intégrations ne signalent pas toujours correctement
-        # le passage à off. Le contrôle est donc répété régulièrement.
         self._remove_periodic_listener = async_track_time_interval(
             self.hass,
             self._async_periodic_security_check,
@@ -126,16 +119,12 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
 
     def update(self) -> None:
         """Compute the current status using the security rules module."""
-
-        # 1. État du commutateur maître
         switch_state = self.hass.states.get("switch.chauffage_general")
         master_on = switch_state is not None and switch_state.state == "on"
 
-        # 2. État du bouton de réarmement
         rearm_state = self.hass.states.get("button.rearmement_securite_chauffage")
         rearm_pressed = rearm_state is not None and rearm_state.state == "on"
 
-        # 3. Calcul du nouvel état avec maintien de l'alerte
         self._attr_native_value = compute_security_state(
             hass=self.hass,
             master_switch_on=master_on,
@@ -187,7 +176,6 @@ class ChauffageSensorBase(SensorEntity):
 
     def _read_coefficient(self) -> float:
         """Read the current coefficient number entity, with fallback."""
-
         coefficient_entity = f"number.coefficient_{self._area_slug}"
         coefficient_state = self.hass.states.get(coefficient_entity)
 
@@ -201,7 +189,6 @@ class ChauffageSensorBase(SensorEntity):
 
     def _get_planning(self) -> str:
         """Fetch the currently resolved planning string for this room."""
-
         data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
         resolver = data.get("resolver")
 
@@ -221,12 +208,10 @@ class TempsDeChauffeSensor(ChauffageSensorBase):
 
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
-
         super().__init__(entry, area_slug, "temps_de_chauffe", "Temps de chauffe")
 
     def update(self) -> None:
         """Update heating time."""
-
         self._attr_native_value = calculate_heating_time(
             self.hass,
             self._entry.data,
@@ -244,7 +229,6 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
 
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
-
         super().__init__(entry, area_slug, "derive", "Derive")
 
         self._attr_native_value = 0
@@ -254,7 +238,6 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
 
     async def async_added_to_hass(self) -> None:
         """Start listening to the interior temperature."""
-
         await super().async_added_to_hass()
 
         temp_entity_id = self._entry.data.get(CONF_TEMP_INT)
@@ -268,14 +251,12 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up the listener."""
-
         if self._remove_listener is not None:
             self._remove_listener()
             self._remove_listener = None
 
     async def _handle_temp_change(self, event) -> None:
         """React to a new interior temperature reading."""
-
         new_state = event.data.get("new_state")
 
         if new_state is None:
@@ -313,30 +294,26 @@ class HeurePlanningSensor(ChauffageSensorBase):
 
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
-
         super().__init__(entry, area_slug, "heure_planning", "Heure planning")
 
     def update(self) -> None:
         """Update."""
-
         self._attr_native_value = get_next_schedule(self._get_planning())
 
 
 class HeurePlanningPrecedentSensor(ChauffageSensorBase):
-    """Previous schedule sensor."""
+    """Previous planning sensor."""
 
     _attr_icon = "mdi:clock-check-outline"
 
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
-
         super().__init__(
             entry, area_slug, "heure_planning_precedent", "Heure planning precedent"
         )
 
     def update(self) -> None:
         """Update."""
-
         self._attr_native_value = get_previous_schedule(self._get_planning())
 
 
@@ -347,12 +324,10 @@ class HeureAnticipeeSensor(ChauffageSensorBase):
 
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
-
         super().__init__(entry, area_slug, "heure_anticipee", "Heure anticipee")
 
     def update(self) -> None:
         """Update."""
-
         self._attr_native_value = calculate_anticipated_time(
             self.hass,
             self._entry.data,
