@@ -5,7 +5,13 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_MODE_SELECTOR, DOMAIN, ENTRY_TYPE, ENTRY_TYPE_CENTRAL, ENTRY_TYPE_GROUP
+from .const import (
+    CONF_MODE_SELECTOR,
+    DOMAIN,
+    ENTRY_TYPE,
+    ENTRY_TYPE_CENTRAL,
+    ENTRY_TYPE_GROUP,
+)
 from .resolver import PlanningResolver
 from .scheduler import ChauffageScheduler
 
@@ -43,7 +49,9 @@ async def async_setup_entry(
     await hass.async_add_executor_job(_preload_platforms)
 
     if entry_type == ENTRY_TYPE_CENTRAL:
-        await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "button"])
+        await hass.config_entries.async_forward_entry_setups(
+            entry, ["switch", "sensor", "button"]
+        )
         hass.data[DOMAIN][entry.entry_id] = {}
         return True
 
@@ -78,7 +86,9 @@ async def async_unload_entry(
         return True
 
     if entry_type == ENTRY_TYPE_CENTRAL:
-        unloaded = await hass.config_entries.async_unload_platforms(entry, ["sensor", "button"])
+        unloaded = await hass.config_entries.async_unload_platforms(
+            entry, ["switch", "sensor", "button"]
+        )
 
         if unloaded:
             hass.data[DOMAIN].pop(entry.entry_id, None)
