@@ -1,4 +1,4 @@
-"""Constants for Chauffage Intelligent."""
+"""Les constantes pour l'intégration Chauffage Intelligent."""
 
 import re
 import unicodedata
