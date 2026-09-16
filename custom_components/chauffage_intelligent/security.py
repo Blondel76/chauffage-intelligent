@@ -32,6 +32,9 @@ def _get_room_entries(hass: HomeAssistant):
 def _all_critical_entities_available(hass: HomeAssistant) -> bool:
     """Vérifie que les entités critiques sont disponibles et non éteintes."""
     for entry in _get_room_entries(hass):
+        # Fusionne data et options au cas où la configuration soit dans options
+        config_data = {**entry.data, **entry.options}
+
         for key in (
             CONF_CLIMATE,
             CONF_TEMP_INT,
@@ -40,17 +43,19 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
             CONF_BOILER_ENTITY,
             CONF_DOOR_SENSOR,
         ):
-            entity_id = entry.data.get(key)
+            entity_id = config_data.get(key)
 
             if not entity_id:
                 continue
 
             state = hass.states.get(entity_id)
 
+            # Entité non trouvée ou indisponible
             if state is None or state.state in ("unknown", "unavailable"):
                 return False
 
-            if key == CONF_CLIMATE and state.state == "off":
+            # Thermostat éteint (mode HVAC 'off')
+            if state.domain == "climate" and state.state == "off":
                 return False
 
     return True
