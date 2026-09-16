@@ -27,7 +27,7 @@ def _get_room_entries(hass: HomeAssistant):
     """Récupère toutes les config entries correspondant à des pièces."""
     all_entries = hass.config_entries.async_entries(DOMAIN)
     room_entries = []
-    
+
     for entry in all_entries:
         config = {**entry.data, **entry.options}
         if config.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM:
@@ -66,7 +66,11 @@ def _all_critical_entities_available(hass: HomeAssistant) -> bool:
                 return False
 
             if state.state in ("unknown", "unavailable"):
-                _LOGGER.warning("[Sécurité] Entité indisponible : %s (état: %s)", entity_id, state.state)
+                _LOGGER.warning(
+                    "[Sécurité] Entité indisponible : %s (état : %s)",
+                    entity_id,
+                    state.state,
+                )
                 return False
 
             if key == CONF_CLIMATE and state.state == "off":
