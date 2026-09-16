@@ -1,4 +1,4 @@
-"""Chauffage Intelligent."""
+"""Initialisation du package de l'intégration Chauffage Intelligent."""
 
 from __future__ import annotations
 
