@@ -30,10 +30,12 @@ from .const import (
     ENTRY_TYPE_ROOM,
     HEATING_TYPE_ELECTRIC,
     HEATING_TYPE_GAS,
+    SECURITY_STATE_CRITICAL,
     VALVE_CLOSED_TEMP,
     VALVE_OPEN_TEMP,
     slugify_area,
 )
+from .security import compute_room_security_state
 
 
 def _get_central_heating_type(hass: HomeAssistant) -> str:
@@ -276,6 +278,13 @@ class ChauffageScheduler:
                         should_activate = True
 
         heating_type = _get_central_heating_type(self.hass)
+
+        # Sécurité : même si le thermostat demande à chauffer, on
+        # n'ouvre jamais la vanne/l'interrupteur tant que la pièce est
+        # en alarme rouge (capteur indisponible, vanne déjà coupée
+        # manuellement, chaudière indisponible...).
+        if compute_room_security_state(self.hass, self.entry) == SECURITY_STATE_CRITICAL:
+            should_activate = False
 
         if heating_type == HEATING_TYPE_ELECTRIC:
             service = "turn_on" if should_activate else "turn_off"
