@@ -19,7 +19,7 @@ from .scheduler import ChauffageScheduler
 def _preload_platforms() -> None:
     """Import platform modules ahead of time (blocking, run in executor)."""
 
-    from . import button, number, sensor, switch  # noqa: F401
+    from . import number, sensor, switch  # noqa: F401
 
 
 def _get_central_mode_selector(hass: HomeAssistant) -> str | None:
@@ -50,7 +50,7 @@ async def async_setup_entry(
 
     if entry_type == ENTRY_TYPE_CENTRAL:
         await hass.config_entries.async_forward_entry_setups(
-            entry, ["switch", "sensor", "button"]
+            entry, ["switch"]
         )
         hass.data[DOMAIN][entry.entry_id] = {}
         return True
@@ -87,7 +87,7 @@ async def async_unload_entry(
 
     if entry_type == ENTRY_TYPE_CENTRAL:
         unloaded = await hass.config_entries.async_unload_platforms(
-            entry, ["switch", "sensor", "button"]
+            entry, ["switch"]
         )
 
         if unloaded:
