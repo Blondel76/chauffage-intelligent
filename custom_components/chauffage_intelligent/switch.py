@@ -12,6 +12,7 @@ from .const import (
     CONF_AREA,
     CONF_CLIMATE,
     CONF_DOOR_SENSOR,
+    CONF_HEATER_ENTITY,
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
@@ -83,7 +84,7 @@ class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
         await self._apply_to_all_rooms("off")
 
     async def _apply_to_all_rooms(self, hvac_mode: str) -> None:
-        """Apply the given hvac_mode to every room's climate entity."""
+        """Apply the given hvac_mode to every room's climate entity (and its valve, if any)."""
 
         for room_entry in self.hass.config_entries.async_entries(DOMAIN):
             if room_entry.data.get(ENTRY_TYPE) != ENTRY_TYPE_ROOM:
@@ -99,6 +100,18 @@ class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
                 "set_hvac_mode",
                 {"entity_id": climate_entity, "hvac_mode": hvac_mode},
             )
+
+            # Si la vanne (chauffage gaz) a été coupée manuellement, la
+            # remettre en cohérence : sinon set_temperature (29/7°C) via
+            # le scheduler n'a aucun effet tant qu'elle reste en "off".
+            heater_entity = room_entry.data.get(CONF_HEATER_ENTITY)
+
+            if heater_entity and heater_entity.startswith("climate."):
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_hvac_mode",
+                    {"entity_id": heater_entity, "hvac_mode": hvac_mode},
+                )
 
 
 class WindowOverrideSwitch(RestoreEntity, SwitchEntity):
