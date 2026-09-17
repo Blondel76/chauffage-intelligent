@@ -64,8 +64,19 @@ def _central_boiler_ok(hass: HomeAssistant) -> bool:
     return True
 
 
-def _room_critical_entities_ok(hass: HomeAssistant, config: dict) -> bool:
-    """Vérifie température int/ext, vanne/interrupteur et capteur de porte de la pièce."""
+def _room_critical_entities_ok(
+    hass: HomeAssistant, config: dict, heating_should_be_active: bool
+) -> bool:
+    """Vérifie température int/ext, vanne/interrupteur et capteur de porte de la pièce.
+
+    La disponibilité (introuvable/unknown/unavailable) est vérifiée en tout
+    temps, été comme hiver, pour détecter une panne avant même le premier
+    besoin de chauffe. La vanne "coupée manuellement" (hvac_mode off alors
+    qu'elle devrait chauffer) n'est en revanche un problème que si le
+    chauffage est censé être actif : sinon, la couper (via l'interrupteur
+    général ou le climate de la pièce) est un comportement normal, pas une
+    panne.
+    """
     for key in (
         CONF_TEMP_INT,
         CONF_TEMP_EXT,
@@ -91,12 +102,14 @@ def _room_critical_entities_ok(hass: HomeAssistant, config: dict) -> bool:
             )
             return False
 
-        # Une vanne pilotée en climate (chauffage gaz) n'est jamais mise en
-        # hvac_mode "off" par l'intégration elle-même (seule sa température
-        # cible 29/7°C est modifiée) : la voir passer à "off" signifie
+        # Une vanne pilotée en climate (chauffage gaz) n'est mise en
+        # hvac_mode "off" par l'intégration elle-même QUE lorsque le
+        # chauffage est globalement coupé (cf. switch.py). La voir passer
+        # à "off" alors que le chauffage devrait être actif signifie donc
         # qu'elle a été coupée manuellement.
         if (
-            key == CONF_HEATER_ENTITY
+            heating_should_be_active
+            and key == CONF_HEATER_ENTITY
             and entity_id.startswith("climate.")
             and state.state == "off"
         ):
@@ -128,11 +141,18 @@ def get_room_critical_entities(hass: HomeAssistant, room_entry: ConfigEntry) -> 
     if boiler_entity:
         entities.add(boiler_entity)
 
+    entities.add("switch.chauffage_general")
+
     return list(entities)
 
 
 def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) -> str:
-    """Calcule l'état de sécurité courant d'une pièce (gris/vert/rouge), sans mémoire."""
+    """Calcule l'état de sécurité courant d'une pièce (gris/vert/rouge), sans mémoire.
+
+    La disponibilité des capteurs/vanne/chaudière est vérifiée en tout
+    temps (été comme hiver), pas seulement quand le chauffage tourne, pour
+    ne pas découvrir une panne seulement au premier démarrage hivernal.
+    """
     config = {**room_entry.data, **room_entry.options}
     climate_entity = config.get(CONF_CLIMATE)
     climate_state = hass.states.get(climate_entity) if climate_entity else None
@@ -143,13 +163,18 @@ def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) ->
         )
         return SECURITY_STATE_CRITICAL
 
-    if climate_state.state == "off":
-        return SECURITY_STATE_OFF
+    switch_state = hass.states.get("switch.chauffage_general")
+    master_on = switch_state is not None and switch_state.state == "on"
+    room_on = climate_state.state != "off"
+    heating_should_be_active = master_on and room_on
 
-    if not _room_critical_entities_ok(hass, config):
+    if not _room_critical_entities_ok(hass, config, heating_should_be_active):
         return SECURITY_STATE_CRITICAL
 
     if not _central_boiler_ok(hass):
         return SECURITY_STATE_CRITICAL
+
+    if not heating_should_be_active:
+        return SECURITY_STATE_OFF
 
     return SECURITY_STATE_OK
