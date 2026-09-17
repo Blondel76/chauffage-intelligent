@@ -39,6 +39,34 @@ def _get_room_entries(hass: HomeAssistant):
     return room_entries
 
 
+def get_all_critical_entities(hass: HomeAssistant) -> list[str]:
+    """Retourne, tous rooms confondus, la liste des entités critiques à surveiller.
+
+    Utilisée pour poser des listeners d'état et réévaluer la sécurité
+    immédiatement (au lieu d'attendre le prochain sondage périodique).
+    """
+    rooms = _get_room_entries(hass)
+    entities: set[str] = set()
+
+    for entry in rooms:
+        config = {**entry.data, **entry.options}
+
+        for key in (
+            CONF_CLIMATE,
+            CONF_TEMP_INT,
+            CONF_TEMP_EXT,
+            CONF_HEATER_ENTITY,
+            CONF_BOILER_ENTITY,
+            CONF_DOOR_SENSOR,
+        ):
+            entity_id = config.get(key)
+
+            if entity_id:
+                entities.add(entity_id)
+
+    return list(entities)
+
+
 def _all_critical_entities_available(hass: HomeAssistant) -> bool:
     """Vérifie que toutes les entités critiques sont disponibles et actives."""
     rooms = _get_room_entries(hass)
