@@ -19,7 +19,6 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
-from .button import SECURITY_REARM_EVENT
 from .calculations import (
     calculate_anticipated_time,
     calculate_heating_time,
@@ -36,10 +35,10 @@ from .const import (
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
-    SECURITY_STATE_OK,
+    SECURITY_STATE_OFF,
     slugify_area,
 )
-from .security import compute_security_state, get_all_critical_entities
+from .security import compute_room_security_state, get_room_critical_entities
 
 SECURITY_CHECK_INTERVAL = timedelta(seconds=5)
 
@@ -52,7 +51,6 @@ async def async_setup_entry(
     """Set up Chauffage Intelligent sensors."""
 
     if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_CENTRAL:
-        async_add_entities([SecuriteChauffageSensor(entry)])
         return
 
     area_name = entry.data[CONF_AREA]
@@ -65,73 +63,68 @@ async def async_setup_entry(
             HeurePlanningSensor(entry, area_slug),
             HeurePlanningPrecedentSensor(entry, area_slug),
             HeureAnticipeeSensor(entry, area_slug),
+            SecuriteRoomSensor(entry, area_slug),
         ]
     )
 
 
 # ==========================================================
-# SECURITE
+# SECURITE (par pièce)
 # ==========================================================
 
 
-class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
-    """House-wide heating security status."""
+class SecuriteRoomSensor(SensorEntity):
+    """État de sécurité d'une pièce : gris (éteint) / vert (ok) / rouge (problème).
+
+    Recalculé en continu à partir de l'état réel des entités ; aucune
+    mémoire/latch, donc aucun réarmement n'est nécessaire.
+    """
 
     _attr_icon = "mdi:shield-check"
     _attr_has_entity_name = True
     _attr_name = "Securite chauffage"
     _attr_should_poll = False
 
-    def __init__(self, entry: ConfigEntry) -> None:
+    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
         self._entry = entry
+        self._area_slug = area_slug
         self._remove_periodic_listener = None
-        self._remove_rearm_listener = None
-        self._remove_critical_listener = None
+        self._remove_state_listener = None
 
         self._attr_unique_id = f"{entry.entry_id}_securite"
-        self.entity_id = "sensor.securite_chauffage"
-        self._attr_suggested_object_id = "securite_chauffage"
+        self.entity_id = f"sensor.securite_{area_slug}"
+        self._attr_suggested_object_id = f"securite_{area_slug}"
 
-        self._attr_native_value = SECURITY_STATE_OK
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, area_slug)},
+            "name": area_slug.replace("_", " ").title(),
+        }
+
+        self._attr_native_value = SECURITY_STATE_OFF
 
     async def async_added_to_hass(self) -> None:
-        """Restore state and start security monitoring."""
+        """Start security monitoring for this room."""
         await super().async_added_to_hass()
 
-        last_state = await self.async_get_last_state()
-        if last_state is not None:
-            self._attr_native_value = last_state.state
+        entites_a_surveiller = get_room_critical_entities(self.hass, self._entry)
 
-        # Écoute de l'événement de réarmement
-        self._remove_rearm_listener = self.hass.bus.async_listen(
-            SECURITY_REARM_EVENT,
-            self._handle_rearm,
-        )
-
-        # Recalcul immédiat dès qu'une entité critique change d'état
-        # (ex. un climate coupé manuellement) plutôt que d'attendre le
-        # sondage périodique ci-dessous.
-        entites_a_surveiller = get_all_critical_entities(self.hass) + [
-            "switch.chauffage_general"
-        ]
-
-        self._remove_critical_listener = async_track_state_change_event(
+        # Recalcul immédiat dès qu'une entité critique de la pièce change
+        # d'état, plutôt que d'attendre le sondage périodique ci-dessous.
+        self._remove_state_listener = async_track_state_change_event(
             self.hass,
             entites_a_surveiller,
-            self._handle_critical_entity_change,
+            self._handle_entity_change,
         )
 
-        # Recalcul automatique toutes les 5 secondes (filet de sécurité,
-        # couvre par ex. l'ajout d'une pièce après le démarrage)
+        # Recalcul automatique toutes les 5 secondes (filet de sécurité)
         self._remove_periodic_listener = async_track_time_interval(
             self.hass,
             self._async_periodic_security_check,
             SECURITY_CHECK_INTERVAL,
         )
 
-        # Calcul initial de l'état interne
-        self._update_state(rearm_pressed=False)
+        self._update_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Stop all security listeners."""
@@ -139,52 +132,32 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
             self._remove_periodic_listener()
             self._remove_periodic_listener = None
 
-        if self._remove_rearm_listener is not None:
-            self._remove_rearm_listener()
-            self._remove_rearm_listener = None
-
-        if self._remove_critical_listener is not None:
-            self._remove_critical_listener()
-            self._remove_critical_listener = None
+        if self._remove_state_listener is not None:
+            self._remove_state_listener()
+            self._remove_state_listener = None
 
         await super().async_will_remove_from_hass()
 
     @callback
-    def _update_state(self, rearm_pressed: bool = False) -> None:
+    def _update_state(self) -> None:
         """Calcule et met à jour la valeur interne sans écrire sur le bus."""
-        switch_state = self.hass.states.get("switch.chauffage_general")
-        master_on = switch_state is not None and switch_state.state == "on"
-
-        current_val = getattr(self, "_attr_native_value", SECURITY_STATE_OK)
-
-        self._attr_native_value = compute_security_state(
-            hass=self.hass,
-            master_switch_on=master_on,
-            current_state=current_val,
-            rearm_pressed=rearm_pressed,
-        )
+        self._attr_native_value = compute_room_security_state(self.hass, self._entry)
 
     @callback
     def _async_periodic_security_check(self, _now=None) -> None:
         """Recalcul périodique de l'état de sécurité."""
-        self._update_state(rearm_pressed=False)
+        self._update_state()
         self.async_write_ha_state()
 
     @callback
-    def _handle_critical_entity_change(self, event: Event) -> None:
+    def _handle_entity_change(self, event: Event) -> None:
         """Réévaluation immédiate suite au changement d'une entité critique."""
-        self._update_state(rearm_pressed=False)
-        self.async_write_ha_state()
-
-    @callback
-    def _handle_rearm(self, event: Event) -> None:
-        """Réarmement manuel déclenché par l'événement."""
-        self._update_state(rearm_pressed=True)
+        self._update_state()
         self.async_write_ha_state()
 
     async def async_update(self) -> None:
         """Mise à jour asynchrone standard."""
-        self._update_state(rearm_pressed=False)
+        self._update_state()
 
 
 # ==========================================================
