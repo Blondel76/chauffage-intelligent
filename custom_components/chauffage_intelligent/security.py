@@ -1,8 +1,13 @@
-"""Security rules and status computation for Chauffage Intelligent."""
+"""Security rules and status computation for Chauffage Intelligent.
+
+L'état de sécurité est désormais calculé par pièce, sans mémoire :
+il reflète toujours l'état réel courant (pas de "réarmement" nécessaire).
+"""
 
 from __future__ import annotations
 
 import logging
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
@@ -15,29 +20,12 @@ from .const import (
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
-    ENTRY_TYPE_ROOM,
     SECURITY_STATE_CRITICAL,
     SECURITY_STATE_OFF,
     SECURITY_STATE_OK,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _get_room_entries(hass: HomeAssistant):
-    """Récupère toutes les config entries correspondant à des pièces."""
-    all_entries = hass.config_entries.async_entries(DOMAIN)
-    room_entries = []
-
-    for entry in all_entries:
-        config = {**entry.data, **entry.options}
-        if config.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM:
-            room_entries.append(entry)
-
-    if not room_entries:
-        _LOGGER.warning("[Sécurité] Aucune pièce trouvée dans les config entries !")
-
-    return room_entries
 
 
 def _get_central_boiler_entity(hass: HomeAssistant) -> str | None:
@@ -50,29 +38,90 @@ def _get_central_boiler_entity(hass: HomeAssistant) -> str | None:
     return None
 
 
-def get_all_critical_entities(hass: HomeAssistant) -> list[str]:
-    """Retourne, tous rooms confondus, la liste des entités critiques à surveiller.
+def _central_boiler_ok(hass: HomeAssistant) -> bool:
+    """Vérifie que la chaudière centrale (si configurée) est disponible."""
+    boiler_entity = _get_central_boiler_entity(hass)
 
-    Utilisée pour poser des listeners d'état et réévaluer la sécurité
-    immédiatement (au lieu d'attendre le prochain sondage périodique).
-    """
-    rooms = _get_room_entries(hass)
+    if not boiler_entity:
+        return True
+
+    state = hass.states.get(boiler_entity)
+
+    if state is None:
+        _LOGGER.warning(
+            "[Sécurité] Entité chaudière introuvable dans HA : %s", boiler_entity
+        )
+        return False
+
+    if state.state in ("unknown", "unavailable"):
+        _LOGGER.warning(
+            "[Sécurité] Chaudière indisponible : %s (état : %s)",
+            boiler_entity,
+            state.state,
+        )
+        return False
+
+    return True
+
+
+def _room_critical_entities_ok(hass: HomeAssistant, config: dict) -> bool:
+    """Vérifie température int/ext, vanne/interrupteur et capteur de porte de la pièce."""
+    for key in (
+        CONF_TEMP_INT,
+        CONF_TEMP_EXT,
+        CONF_HEATER_ENTITY,
+        CONF_DOOR_SENSOR,
+    ):
+        entity_id = config.get(key)
+
+        if not entity_id:
+            continue
+
+        state = hass.states.get(entity_id)
+
+        if state is None:
+            _LOGGER.warning("[Sécurité] Entité introuvable dans HA : %s", entity_id)
+            return False
+
+        if state.state in ("unknown", "unavailable"):
+            _LOGGER.warning(
+                "[Sécurité] Entité indisponible : %s (état : %s)",
+                entity_id,
+                state.state,
+            )
+            return False
+
+        # Une vanne pilotée en climate (chauffage gaz) n'est jamais mise en
+        # hvac_mode "off" par l'intégration elle-même (seule sa température
+        # cible 29/7°C est modifiée) : la voir passer à "off" signifie
+        # qu'elle a été coupée manuellement.
+        if (
+            key == CONF_HEATER_ENTITY
+            and entity_id.startswith("climate.")
+            and state.state == "off"
+        ):
+            _LOGGER.warning("[Sécurité] Vanne coupée manuellement : %s", entity_id)
+            return False
+
+    return True
+
+
+def get_room_critical_entities(hass: HomeAssistant, room_entry: ConfigEntry) -> list[str]:
+    """Retourne les entités à surveiller pour la sécurité d'une pièce (thermostat, capteurs, vanne, porte, chaudière)."""
+    config = {**room_entry.data, **room_entry.options}
     entities: set[str] = set()
 
-    for entry in rooms:
-        config = {**entry.data, **entry.options}
+    for key in (
+        CONF_CLIMATE,
+        CONF_TEMP_INT,
+        CONF_TEMP_EXT,
+        CONF_HEATER_ENTITY,
+        CONF_DOOR_SENSOR,
+    ):
+        entity_id = config.get(key)
 
-        for key in (
-            CONF_CLIMATE,
-            CONF_TEMP_INT,
-            CONF_TEMP_EXT,
-            CONF_HEATER_ENTITY,
-            CONF_DOOR_SENSOR,
-        ):
-            entity_id = config.get(key)
-
-            if entity_id:
-                entities.add(entity_id)
+        if entity_id:
+            entities.add(entity_id)
 
     boiler_entity = _get_central_boiler_entity(hass)
 
@@ -82,92 +131,25 @@ def get_all_critical_entities(hass: HomeAssistant) -> list[str]:
     return list(entities)
 
 
-def _all_critical_entities_available(hass: HomeAssistant) -> bool:
-    """Vérifie que toutes les entités critiques sont disponibles et actives."""
-    rooms = _get_room_entries(hass)
+def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) -> str:
+    """Calcule l'état de sécurité courant d'une pièce (gris/vert/rouge), sans mémoire."""
+    config = {**room_entry.data, **room_entry.options}
+    climate_entity = config.get(CONF_CLIMATE)
+    climate_state = hass.states.get(climate_entity) if climate_entity else None
 
-    for entry in rooms:
-        config = {**entry.data, **entry.options}
-
-        for key in (
-            CONF_CLIMATE,
-            CONF_TEMP_INT,
-            CONF_TEMP_EXT,
-            CONF_HEATER_ENTITY,
-            CONF_DOOR_SENSOR,
-        ):
-            entity_id = config.get(key)
-
-            if not entity_id:
-                continue
-
-            state = hass.states.get(entity_id)
-
-            if state is None:
-                _LOGGER.warning("[Sécurité] Entité introuvable dans HA : %s", entity_id)
-                return False
-
-            if state.state in ("unknown", "unavailable"):
-                _LOGGER.warning(
-                    "[Sécurité] Entité indisponible : %s (état : %s)",
-                    entity_id,
-                    state.state,
-                )
-                return False
-
-            if key == CONF_CLIMATE and state.state == "off":
-                _LOGGER.warning("[Sécurité] Thermostat éteint détecté : %s", entity_id)
-                return False
-
-            # Une vanne pilotée en climate (chauffage gaz) n'est jamais mise
-            # en hvac_mode "off" par l'intégration elle-même (seule sa
-            # température cible 29/7°C est modifiée) : la voir passer à
-            # "off" signifie qu'elle a été coupée manuellement et que
-            # l'intégration ne peut plus la piloter.
-            if (
-                key == CONF_HEATER_ENTITY
-                and entity_id.startswith("climate.")
-                and state.state == "off"
-            ):
-                _LOGGER.warning("[Sécurité] Vanne coupée manuellement : %s", entity_id)
-                return False
-
-    boiler_entity = _get_central_boiler_entity(hass)
-
-    if boiler_entity:
-        state = hass.states.get(boiler_entity)
-
-        if state is None:
-            _LOGGER.warning(
-                "[Sécurité] Entité chaudière introuvable dans HA : %s", boiler_entity
-            )
-            return False
-
-        if state.state in ("unknown", "unavailable"):
-            _LOGGER.warning(
-                "[Sécurité] Chaudière indisponible : %s (état : %s)",
-                boiler_entity,
-                state.state,
-            )
-            return False
-
-    return True
-
-
-def compute_security_state(
-    hass: HomeAssistant,
-    master_switch_on: bool,
-    current_state: str = SECURITY_STATE_OK,
-    rearm_pressed: bool = False,
-) -> str:
-    """Calculer l'état global de sécurité du chauffage avec auto-maintien."""
-    if not master_switch_on:
-        return SECURITY_STATE_OFF
-
-    if not _all_critical_entities_available(hass):
+    if climate_state is None or climate_state.state in ("unknown", "unavailable"):
+        _LOGGER.warning(
+            "[Sécurité] Thermostat introuvable ou indisponible : %s", climate_entity
+        )
         return SECURITY_STATE_CRITICAL
 
-    if current_state == SECURITY_STATE_CRITICAL and not rearm_pressed:
+    if climate_state.state == "off":
+        return SECURITY_STATE_OFF
+
+    if not _room_critical_entities_ok(hass, config):
+        return SECURITY_STATE_CRITICAL
+
+    if not _central_boiler_ok(hass):
         return SECURITY_STATE_CRITICAL
 
     return SECURITY_STATE_OK
