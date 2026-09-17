@@ -39,7 +39,7 @@ from .const import (
     SECURITY_STATE_OK,
     slugify_area,
 )
-from .security import compute_security_state
+from .security import compute_security_state, get_all_critical_entities
 
 SECURITY_CHECK_INTERVAL = timedelta(seconds=5)
 
@@ -87,6 +87,7 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         self._entry = entry
         self._remove_periodic_listener = None
         self._remove_rearm_listener = None
+        self._remove_critical_listener = None
 
         self._attr_unique_id = f"{entry.entry_id}_securite"
         self.entity_id = "sensor.securite_chauffage"
@@ -108,7 +109,21 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
             self._handle_rearm,
         )
 
-        # Recalcul automatique toutes les 5 secondes
+        # Recalcul immédiat dès qu'une entité critique change d'état
+        # (ex. un climate coupé manuellement) plutôt que d'attendre le
+        # sondage périodique ci-dessous.
+        entites_a_surveiller = get_all_critical_entities(self.hass) + [
+            "switch.chauffage_general"
+        ]
+
+        self._remove_critical_listener = async_track_state_change_event(
+            self.hass,
+            entites_a_surveiller,
+            self._handle_critical_entity_change,
+        )
+
+        # Recalcul automatique toutes les 5 secondes (filet de sécurité,
+        # couvre par ex. l'ajout d'une pièce après le démarrage)
         self._remove_periodic_listener = async_track_time_interval(
             self.hass,
             self._async_periodic_security_check,
@@ -127,6 +142,10 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
         if self._remove_rearm_listener is not None:
             self._remove_rearm_listener()
             self._remove_rearm_listener = None
+
+        if self._remove_critical_listener is not None:
+            self._remove_critical_listener()
+            self._remove_critical_listener = None
 
         await super().async_will_remove_from_hass()
 
@@ -148,6 +167,12 @@ class SecuriteChauffageSensor(RestoreEntity, SensorEntity):
     @callback
     def _async_periodic_security_check(self, _now=None) -> None:
         """Recalcul périodique de l'état de sécurité."""
+        self._update_state(rearm_pressed=False)
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_critical_entity_change(self, event: Event) -> None:
+        """Réévaluation immédiate suite au changement d'une entité critique."""
         self._update_state(rearm_pressed=False)
         self.async_write_ha_state()
 
