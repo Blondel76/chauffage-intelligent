@@ -20,8 +20,10 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
 from .calculations import (
+    calculate_aeration,
     calculate_anticipated_time,
     calculate_heating_time,
+    calculate_humidity_level,
     get_next_schedule,
     get_previous_schedule,
 )
@@ -64,6 +66,8 @@ async def async_setup_entry(
             HeurePlanningPrecedentSensor(entry, area_slug),
             HeureAnticipeeSensor(entry, area_slug),
             SecuriteRoomSensor(entry, area_slug),
+            AerationSensor(entry, area_slug),
+            HumiditeSensor(entry, area_slug),
         ]
     )
 
@@ -367,3 +371,31 @@ class HeureAnticipeeSensor(ChauffageSensorBase):
             self._get_planning(),
             self._read_coefficient(),
         )
+
+
+class AerationSensor(ChauffageSensorBase):
+    """Recommandation d'aération (humidité absolue intérieure vs extérieure)."""
+
+    _attr_icon = "mdi:window-open-variant"
+
+    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
+        """Initialize."""
+        super().__init__(entry, area_slug, "aeration", "Aération")
+
+    def update(self) -> None:
+        """Update."""
+        self._attr_native_value = calculate_aeration(self.hass, self._entry.data)
+
+
+class HumiditeSensor(ChauffageSensorBase):
+    """Niveau d'humidité intérieure."""
+
+    _attr_icon = "mdi:water-percent"
+
+    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
+        """Initialize."""
+        super().__init__(entry, area_slug, "humidite", "Humidité")
+
+    def update(self) -> None:
+        """Update."""
+        self._attr_native_value = calculate_humidity_level(self.hass, self._entry.data)
