@@ -57,6 +57,15 @@ DERIVE_INTERVAL_MINUTES = 3
 VALVE_OPEN_TEMP = 29
 VALVE_CLOSED_TEMP = 7
 
+"""Seuils pour l'aération (différence d'humidité absolue int/ext, en g/m³)"""
+AERATION_SEUIL_RECOMMANDEE = 1.0
+AERATION_SEUIL_POSSIBLE = 0.3
+
+"""Seuils pour le niveau d'humidité intérieure (en %)"""
+HUMIDITE_SEUIL_ELEVEE = 60
+HUMIDITE_SEUIL_TRES_ELEVEE = 65
+HUMIDITE_SEUIL_EXCESSIVE = 70
+
 
 """formule pour uniformiser le code"""
 def slugify_area(area_name: str) -> str:
