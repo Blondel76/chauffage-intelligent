@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_CLIMATE, CONF_TEMP_EXT, CONF_TEMP_INT, COEFFICIENT_MIN, COEFFICIENT_MAX
+from .const import (
+    AERATION_SEUIL_POSSIBLE,
+    AERATION_SEUIL_RECOMMANDEE,
+    CONF_CLIMATE,
+    CONF_TEMP_EXT,
+    CONF_TEMP_INT,
+    COEFFICIENT_MIN,
+    COEFFICIENT_MAX,
+    HUMIDITE_SEUIL_ELEVEE,
+    HUMIDITE_SEUIL_EXCESSIVE,
+    HUMIDITE_SEUIL_TRES_ELEVEE,
+)
 
 
 def get_float(
@@ -239,3 +251,96 @@ def calculate_new_coefficient(
     coefficient = ancien * 0.8 + nouveau * 0.2
 
     return round(_clamp_coefficient(coefficient), 1)
+
+
+# ==========================================================
+# HUMIDITÉ / AÉRATION
+# ==========================================================
+
+
+def _humidite_associee(temp_entity_id: str | None) -> str | None:
+    """Déduit l'entité humidité du même appareil qu'un capteur de température.
+
+    Suppose que le capteur de température s'appelle
+    'sensor.xxx_temperature' et que le capteur d'humidité du même
+    appareil s'appelle 'sensor.xxx_humidity'.
+    """
+
+    if not temp_entity_id or not temp_entity_id.endswith("_temperature"):
+        return None
+
+    return temp_entity_id[: -len("_temperature")] + "_humidity"
+
+
+def _humidite_absolue(temp: float, humidite: float) -> float:
+    """Humidité absolue en g/m³ (formule de Magnus)."""
+
+    es = 6.112 * math.exp((17.62 * temp) / (243.12 + temp))
+    ea = es * humidite / 100
+
+    return 216.7 * ea / (temp + 273.15)
+
+
+def _entite_disponible(hass: HomeAssistant, entity_id: str | None) -> bool:
+    """Vérifie qu'une entité existe et n'est pas unknown/unavailable."""
+
+    if not entity_id:
+        return False
+
+    state = hass.states.get(entity_id)
+
+    return state is not None and state.state not in ("unknown", "unavailable")
+
+
+def calculate_aeration(hass: HomeAssistant, config: dict) -> str:
+    """Recommandation d'aération à partir de l'humidité absolue int/ext."""
+
+    temp_int = config.get(CONF_TEMP_INT)
+    temp_ext = config.get(CONF_TEMP_EXT)
+    hum_int = _humidite_associee(temp_int)
+    hum_ext = _humidite_associee(temp_ext)
+
+    entites = (temp_int, temp_ext, hum_int, hum_ext)
+
+    if not all(entites) or not all(_entite_disponible(hass, e) for e in entites):
+        return "unknown"
+
+    ti = get_float(hass, temp_int)
+    te = get_float(hass, temp_ext)
+    rhi = get_float(hass, hum_int)
+    rhe = get_float(hass, hum_ext)
+
+    difference = _humidite_absolue(ti, rhi) - _humidite_absolue(te, rhe)
+
+    if difference > AERATION_SEUIL_RECOMMANDEE:
+        return "Aération recommandée"
+
+    if difference > AERATION_SEUIL_POSSIBLE:
+        return "Aération possible"
+
+    if difference > -AERATION_SEUIL_POSSIBLE:
+        return "Peu utile"
+
+    return "Aération déconseillée"
+
+
+def calculate_humidity_level(hass: HomeAssistant, config: dict) -> str:
+    """Niveau qualitatif de l'humidité intérieure."""
+
+    hum_int = _humidite_associee(config.get(CONF_TEMP_INT))
+
+    if not _entite_disponible(hass, hum_int):
+        return "unknown"
+
+    h = get_float(hass, hum_int)
+
+    if h < HUMIDITE_SEUIL_ELEVEE:
+        return "Normal"
+
+    if h < HUMIDITE_SEUIL_TRES_ELEVEE:
+        return "Élevée"
+
+    if h < HUMIDITE_SEUIL_EXCESSIVE:
+        return "Très élevée"
+
+    return "Excessive"
