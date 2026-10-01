@@ -12,7 +12,7 @@ from homeassistant.helpers.event import (
 )
 
 from .boiler import update_boiler_state
-from .calculations import get_float
+from .calculations import get_float, get_previous_schedule
 from .const import (
     CONF_AREA,
     CONF_CLIMATE,
@@ -140,7 +140,9 @@ class ChauffageScheduler:
                 )
             )
 
-        self.hass.async_create_task(self._apply_current_slot())
+        # Au démarrage : appliquer le créneau EN COURS (le précédent),
+        # pas le prochain, pour rattraper un redémarrage de HA.
+        self.hass.async_create_task(self.apply_slot_for_now())
         self.hass.async_create_task(self._update_heater())
 
     def stop(self) -> None:
@@ -187,19 +189,13 @@ class ChauffageScheduler:
 
         await self._apply_current_slot()
 
-    async def _apply_current_slot(self) -> None:
-        """Read the current planning slot and apply its preset."""
+    async def _apply_slot(self, slot: str) -> None:
+        """Apply the preset of a 'HH:MM|preset' slot."""
 
-        if not self.climate_entity:
+        if not self.climate_entity or not slot or "|" not in slot:
             return
 
-        planning_entity = f"sensor.heure_planning_{self.area_slug}"
-        planning_state = self.hass.states.get(planning_entity)
-
-        if planning_state is None or "|" not in planning_state.state:
-            return
-
-        preset = planning_state.state.split("|")[1].strip()
+        preset = slot.split("|", 1)[1].strip()
 
         if not preset:
             return
@@ -209,6 +205,31 @@ class ChauffageScheduler:
             "set_preset_mode",
             {"entity_id": self.climate_entity, "preset_mode": preset},
         )
+
+    async def apply_slot_for_now(self) -> None:
+        """Apply the slot that should be active right now (the previous one).
+
+        Calculé directement depuis le résolveur, sans dépendre d'un
+        capteur qui pourrait ne pas être encore prêt.
+        """
+
+        data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+        resolver = data.get("resolver")
+
+        if resolver is None:
+            return
+
+        await self._apply_slot(get_previous_schedule(resolver.get_active_planning()))
+
+    async def _apply_current_slot(self) -> None:
+        """Apply the upcoming slot (called at the anticipated start time)."""
+
+        planning_state = self.hass.states.get(f"sensor.heure_planning_{self.area_slug}")
+
+        if planning_state is None:
+            return
+
+        await self._apply_slot(planning_state.state)
 
     # ------------------------------------------------------------
     # Sécurité fenêtre/porte
