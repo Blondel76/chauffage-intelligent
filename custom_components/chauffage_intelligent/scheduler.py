@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_change,
 )
+from homeassistant.helpers.start import async_at_started
 
 from .boiler import update_boiler_state
 from .calculations import get_float, get_previous_schedule
@@ -117,6 +119,7 @@ class ChauffageScheduler:
         self.window_switch_entity = f"switch.fenetre_ouverte_{self.area_slug}"
 
         self._remove_listeners: list = []
+        self._delayed_apply_task: asyncio.Task | None = None
 
     def start(self) -> None:
         """Start listening for time changes, window state, and climate changes."""
@@ -141,17 +144,48 @@ class ChauffageScheduler:
             )
 
         # Au démarrage : appliquer le créneau EN COURS (le précédent),
-        # pas le prochain, pour rattraper un redémarrage de HA.
-        self.hass.async_create_task(self.apply_slot_for_now())
+        # mais seulement une fois HA entièrement démarré (thermostats
+        # chargés). Si HA tourne déjà (rechargement), c'est immédiat.
+        self._remove_listeners.append(
+            async_at_started(self.hass, self._handle_ha_started)
+        )
+
         self.hass.async_create_task(self._update_heater())
 
     def stop(self) -> None:
         """Stop all listeners."""
 
         for remove in self._remove_listeners:
-            remove()
+            if remove is not None:
+                remove()
 
         self._remove_listeners.clear()
+
+        if self._delayed_apply_task is not None:
+            self._delayed_apply_task.cancel()
+            self._delayed_apply_task = None
+
+    @callback
+    def _handle_ha_started(self, hass: HomeAssistant) -> None:
+        """HA est entièrement démarré : appliquer le créneau en cours."""
+
+        self._schedule_delayed_apply()
+
+    def _schedule_delayed_apply(self) -> None:
+        """Planifie l'application du créneau en cours après un court délai."""
+
+        if self._delayed_apply_task is not None:
+            self._delayed_apply_task.cancel()
+
+        self._delayed_apply_task = self.hass.async_create_task(
+            self._delayed_apply()
+        )
+
+    async def _delayed_apply(self) -> None:
+        """Attend que le thermostat se stabilise, puis applique le créneau."""
+
+        await asyncio.sleep(5)
+        await self.apply_slot_for_now()
 
     # ------------------------------------------------------------
     # Programmation horaire
@@ -213,6 +247,13 @@ class ChauffageScheduler:
         capteur qui pourrait ne pas être encore prêt.
         """
 
+        climate_state = (
+            self.hass.states.get(self.climate_entity) if self.climate_entity else None
+        )
+
+        if climate_state is None or climate_state.state in ("unknown", "unavailable"):
+            return
+
         data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
         resolver = data.get("resolver")
 
@@ -264,6 +305,18 @@ class ChauffageScheduler:
         self, event: Event[EventStateChangedData]
     ) -> None:
         """React immediately to this room's own climate changes."""
+
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+
+        # Le thermostat redevient disponible (ex. après un démarrage de HA) :
+        # réappliquer le créneau en cours.
+        if (
+            new_state is not None
+            and new_state.state not in ("unknown", "unavailable")
+            and (old_state is None or old_state.state in ("unknown", "unavailable"))
+        ):
+            self._schedule_delayed_apply()
 
         await self._update_heater()
 
