@@ -32,20 +32,6 @@ def _get_central_mode_selector(hass: HomeAssistant) -> str | None:
     return None
 
 
-async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Réapplique le créneau en cours quand le planning d'une pièce est modifié."""
-
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-
-    if not data:
-        return
-
-    scheduler = data.get("scheduler")
-
-    if scheduler is not None:
-        await scheduler.apply_slot_for_now()
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -79,16 +65,13 @@ async def async_setup_entry(
     scheduler = ChauffageScheduler(hass, entry)
 
     # Le resolver et le scheduler doivent être dans hass.data AVANT
-    # scheduler.start(), car apply_slot_for_now() y lit le resolver.
+    # scheduler.start(), car la réconciliation du preset y lit le resolver.
     hass.data[DOMAIN][entry.entry_id] = {
         "resolver": resolver,
         "scheduler": scheduler,
     }
 
     scheduler.start()
-
-    # Sauvegarde d'un planning (options flow) -> applique le créneau en cours.
-    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
     return True
 
