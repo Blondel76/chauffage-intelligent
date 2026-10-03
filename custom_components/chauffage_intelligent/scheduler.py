@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import timedelta
+import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant
 from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_change,
 )
-from homeassistant.helpers.start import async_at_started
+from homeassistant.util import dt as dt_util
 
 from .boiler import update_boiler_state
-from .calculations import get_float, get_previous_schedule
+from .calculations import _normalized_hour, get_float, get_previous_schedule
 from .const import (
     CONF_AREA,
     CONF_CLIMATE,
@@ -38,6 +37,8 @@ from .const import (
     slugify_area,
 )
 from .security import compute_room_security_state
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _get_central_heating_type(hass: HomeAssistant) -> str:
@@ -119,13 +120,18 @@ class ChauffageScheduler:
         self.window_switch_entity = f"switch.fenetre_ouverte_{self.area_slug}"
 
         self._remove_listeners: list = []
-        self._delayed_apply_task: asyncio.Task | None = None
+
+        # Créneau à venir pour lequel l'anticipation a démarré. Mémorisé
+        # pour ne pas repasser au créneau précédent si l'heure anticipée
+        # recalculée glisse pendant la montée en température.
+        self._anticipated_slot: str | None = None
 
     def start(self) -> None:
         """Start listening for time changes, window state, and climate changes."""
 
+        # Toutes les 30 s : pilotage de la chauffe + réconciliation du preset.
         self._remove_listeners.append(
-            async_track_time_change(self.hass, self._handle_minute_tick, second=0)
+            async_track_time_change(self.hass, self._handle_tick, second=[0, 30])
         )
 
         window_entity = self.door_entity or self.window_switch_entity
@@ -143,13 +149,6 @@ class ChauffageScheduler:
                 )
             )
 
-        # Au démarrage : appliquer le créneau EN COURS (le précédent),
-        # mais seulement une fois HA entièrement démarré (thermostats
-        # chargés). Si HA tourne déjà (rechargement), c'est immédiat.
-        self._remove_listeners.append(
-            async_at_started(self.hass, self._handle_ha_started)
-        )
-
         self.hass.async_create_task(self._update_heater())
 
     def stop(self) -> None:
@@ -161,67 +160,112 @@ class ChauffageScheduler:
 
         self._remove_listeners.clear()
 
-        if self._delayed_apply_task is not None:
-            self._delayed_apply_task.cancel()
-            self._delayed_apply_task = None
-
-    @callback
-    def _handle_ha_started(self, hass: HomeAssistant) -> None:
-        """HA est entièrement démarré : appliquer le créneau en cours."""
-
-        self._schedule_delayed_apply()
-
-    def _schedule_delayed_apply(self) -> None:
-        """Planifie l'application du créneau en cours après un court délai."""
-
-        if self._delayed_apply_task is not None:
-            self._delayed_apply_task.cancel()
-
-        self._delayed_apply_task = self.hass.async_create_task(
-            self._delayed_apply()
-        )
-
-    async def _delayed_apply(self) -> None:
-        """Attend que le thermostat se stabilise, puis applique le créneau."""
-
-        await asyncio.sleep(5)
-        await self.apply_slot_for_now()
-
     # ------------------------------------------------------------
     # Programmation horaire
     # ------------------------------------------------------------
 
-    async def _handle_minute_tick(self, now) -> None:
-        """Apply the preset 1 minute before the anticipated heating start.
+    async def _handle_tick(self, now) -> None:
+        """Toutes les 30 s : chauffe + réconciliation du preset.
 
-        Also re-checks the heater activation every minute, to catch group
-        borrowing opportunities without needing a listener on every linked
-        room's climate entity.
+        La réconciliation compare le preset attendu (planning, anticipation
+        comprise) avec celui du thermostat et corrige l'écart. Cela couvre
+        sans code dédié le démarrage de HA, la modification d'un planning,
+        un changement de mode et un thermostat qui redevient disponible.
         """
 
         await self._update_heater()
+        await self._reconcile_preset()
+
+    def _slot_due_now(self) -> str | None:
+        """Retourne le créneau 'HH:MM|preset' qui doit être actif maintenant.
+
+        - Hors anticipation : le créneau précédent (dernier passé).
+        - En anticipation : le créneau à venir, dès l'heure anticipée.
+        """
+
+        data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+        resolver = data.get("resolver")
+
+        if resolver is None:
+            return None
+
+        due = get_previous_schedule(resolver.get_active_planning())
+
+        if due == "unknown":
+            return None
+
+        # Le créneau anticipé est arrivé : il devient le créneau normal.
+        if self._anticipated_slot is not None and due == self._anticipated_slot:
+            self._anticipated_slot = None
+            return due
+
+        ant = self.hass.states.get(f"sensor.heure_anticipee_{self.area_slug}")
+        nxt = self.hass.states.get(f"sensor.heure_planning_{self.area_slug}")
+
+        if nxt is None or "|" not in nxt.state:
+            self._anticipated_slot = None
+            return due
+
+        # Anticipation déjà démarrée pour ce créneau : on la conserve.
+        if self._anticipated_slot is not None:
+            if nxt.state == self._anticipated_slot:
+                return nxt.state
+
+            # Le planning a changé entre-temps : on abandonne l'anticipation.
+            self._anticipated_slot = None
+
+        if ant is None or ant.state in ("unknown", "unavailable"):
+            return due
+
+        try:
+            ah, am = map(int, ant.state.split(":"))
+            nxt_hour = _normalized_hour(nxt.state.split("|")[0].strip())
+            nh, nm = map(int, nxt_hour.split(":"))
+        except (ValueError, AttributeError):
+            return due
+
+        now = dt_util.now()
+        now_min = now.hour * 60 + now.minute
+        start = ah * 60 + am
+        end = nh * 60 + nm
+
+        if start <= end:
+            in_window = start <= now_min <= end
+        else:
+            # Anticipation à cheval sur minuit.
+            in_window = now_min >= start or now_min <= end
+
+        if in_window:
+            self._anticipated_slot = nxt.state
+            return nxt.state
+
+        return due
+
+    async def _reconcile_preset(self) -> None:
+        """Applique le preset attendu s'il diffère de celui du thermostat."""
 
         if not self.climate_entity:
             return
 
-        anticipee_entity = f"sensor.heure_anticipee_{self.area_slug}"
-        anticipee_state = self.hass.states.get(anticipee_entity)
+        climate_state = self.hass.states.get(self.climate_entity)
 
-        if anticipee_state is None or anticipee_state.state in ("unknown", "unavailable"):
+        if climate_state is None or climate_state.state in ("unknown", "unavailable"):
             return
 
-        try:
-            hh, mm = map(int, anticipee_state.state.split(":"))
-        except ValueError:
+        slot = self._slot_due_now()
+
+        if slot is None or "|" not in slot:
             return
 
-        cible = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        application = cible - timedelta(minutes=1)
+        preset = slot.split("|", 1)[1].strip()
 
-        if now.strftime("%H:%M") != application.strftime("%H:%M"):
+        if not preset:
             return
 
-        await self._apply_current_slot()
+        if climate_state.attributes.get("preset_mode") == preset:
+            return
+
+        await self._apply_slot(slot)
 
     async def _apply_slot(self, slot: str) -> None:
         """Apply the preset of a 'HH:MM|preset' slot."""
@@ -234,43 +278,17 @@ class ChauffageScheduler:
         if not preset:
             return
 
-        await self.hass.services.async_call(
-            "climate",
-            "set_preset_mode",
-            {"entity_id": self.climate_entity, "preset_mode": preset},
-        )
-
-    async def apply_slot_for_now(self) -> None:
-        """Apply the slot that should be active right now (the previous one).
-
-        Calculé directement depuis le résolveur, sans dépendre d'un
-        capteur qui pourrait ne pas être encore prêt.
-        """
-
-        climate_state = (
-            self.hass.states.get(self.climate_entity) if self.climate_entity else None
-        )
-
-        if climate_state is None or climate_state.state in ("unknown", "unavailable"):
-            return
-
-        data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
-        resolver = data.get("resolver")
-
-        if resolver is None:
-            return
-
-        await self._apply_slot(get_previous_schedule(resolver.get_active_planning()))
-
-    async def _apply_current_slot(self) -> None:
-        """Apply the upcoming slot (called at the anticipated start time)."""
-
-        planning_state = self.hass.states.get(f"sensor.heure_planning_{self.area_slug}")
-
-        if planning_state is None:
-            return
-
-        await self._apply_slot(planning_state.state)
+        try:
+            await self.hass.services.async_call(
+                "climate",
+                "set_preset_mode",
+                {"entity_id": self.climate_entity, "preset_mode": preset},
+                blocking=True,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error(
+                "Preset '%s' refusé par %s : %s", preset, self.climate_entity, err
+            )
 
     # ------------------------------------------------------------
     # Sécurité fenêtre/porte
@@ -305,18 +323,6 @@ class ChauffageScheduler:
         self, event: Event[EventStateChangedData]
     ) -> None:
         """React immediately to this room's own climate changes."""
-
-        old_state = event.data.get("old_state")
-        new_state = event.data.get("new_state")
-
-        # Le thermostat redevient disponible (ex. après un démarrage de HA) :
-        # réappliquer le créneau en cours.
-        if (
-            new_state is not None
-            and new_state.state not in ("unknown", "unavailable")
-            and (old_state is None or old_state.state in ("unknown", "unavailable"))
-        ):
-            self._schedule_delayed_apply()
 
         await self._update_heater()
 
