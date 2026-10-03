@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from .const import (
     AERATION_SEUIL_POSSIBLE,
@@ -117,7 +118,7 @@ def get_next_schedule(planning: str) -> str:
     if not planning or planning in {"unknown", "unavailable", "none"}:
         return "unknown"
 
-    maintenant = datetime.now().strftime("%H:%M")
+    maintenant = dt_util.now().strftime("%H:%M")
 
     for item in planning.split(","):
 
@@ -145,7 +146,7 @@ def get_previous_schedule(planning: str) -> str:
     if not planning or planning in {"unknown", "unavailable", "none"}:
         return "unknown"
 
-    maintenant = datetime.now().strftime("%H:%M")
+    maintenant = dt_util.now().strftime("%H:%M")
 
     resultat = None
 
@@ -206,7 +207,7 @@ def calculate_anticipated_time(
     if besoin <= 0 or besoin >= 180:
         return cible_ok
 
-    maintenant = datetime.now()
+    maintenant = dt_util.now()
 
     cible_date = maintenant.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
