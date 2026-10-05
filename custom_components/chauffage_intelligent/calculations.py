@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
-from homeassistant.util import dt as dt_util
 
 from .const import (
     AERATION_SEUIL_POSSIBLE,
     AERATION_SEUIL_RECOMMANDEE,
+    CONF_BOILER_ENTITY,
     CONF_CLIMATE,
+    CONF_COLD_OFFSET,
+    CONF_HOT_OFFSET,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
     COEFFICIENT_MIN,
     COEFFICIENT_MAX,
+    DEFAULT_COLD_OFFSET,
+    DEFAULT_HOT_OFFSET,
+    DOMAIN,
+    ENTRY_TYPE,
+    ENTRY_TYPE_CENTRAL,
     HUMIDITE_SEUIL_ELEVEE,
     HUMIDITE_SEUIL_EXCESSIVE,
     HUMIDITE_SEUIL_TRES_ELEVEE,
@@ -118,7 +125,7 @@ def get_next_schedule(planning: str) -> str:
     if not planning or planning in {"unknown", "unavailable", "none"}:
         return "unknown"
 
-    maintenant = dt_util.now().strftime("%H:%M")
+    maintenant = datetime.now().strftime("%H:%M")
 
     for item in planning.split(","):
 
@@ -146,7 +153,7 @@ def get_previous_schedule(planning: str) -> str:
     if not planning or planning in {"unknown", "unavailable", "none"}:
         return "unknown"
 
-    maintenant = dt_util.now().strftime("%H:%M")
+    maintenant = datetime.now().strftime("%H:%M")
 
     resultat = None
 
@@ -207,7 +214,7 @@ def calculate_anticipated_time(
     if besoin <= 0 or besoin >= 180:
         return cible_ok
 
-    maintenant = dt_util.now()
+    maintenant = datetime.now()
 
     cible_date = maintenant.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
@@ -252,6 +259,120 @@ def calculate_new_coefficient(
     coefficient = ancien * 0.8 + nouveau * 0.2
 
     return round(_clamp_coefficient(coefficient), 1)
+
+
+# ==========================================================
+# PIÈCE FROIDE / PIÈCE CHAUDE
+# ==========================================================
+
+
+def _numeric_state(hass: HomeAssistant, entity_id: str | None) -> float | None:
+    """Return a numeric state, or None if missing/unavailable/non numeric."""
+
+    if not entity_id:
+        return None
+
+    state = hass.states.get(entity_id)
+
+    if state is None or state.state in ("unknown", "unavailable"):
+        return None
+
+    try:
+        return float(state.state)
+    except (ValueError, TypeError):
+        return None
+
+
+def _room_target(hass: HomeAssistant, config: dict) -> float | None:
+    """Return the thermostat's current setpoint, or None if unavailable."""
+
+    climate = hass.states.get(config.get(CONF_CLIMATE))
+
+    if climate is None:
+        return None
+
+    try:
+        return float(climate.attributes.get("temperature"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _offset(config: dict, key: str, default: float) -> float:
+    """Read a configurable offset, falling back to its default."""
+
+    try:
+        return float(config.get(key, default))
+    except (ValueError, TypeError):
+        return default
+
+
+def get_central_boiler_entity(hass: HomeAssistant) -> str | None:
+    """Return the boiler entity declared in the central config, if any."""
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        config = {**entry.data, **entry.options}
+
+        if config.get(ENTRY_TYPE) == ENTRY_TYPE_CENTRAL:
+            return config.get(CONF_BOILER_ENTITY)
+
+    return None
+
+
+def is_boiler_heating(hass: HomeAssistant, boiler_entity: str) -> bool:
+    """True if the boiler is currently heating (switch on / climate heating)."""
+
+    state = hass.states.get(boiler_entity)
+
+    if state is None or state.state in ("unknown", "unavailable"):
+        return False
+
+    if boiler_entity.startswith("climate."):
+        action = state.attributes.get("hvac_action")
+
+        if action is not None:
+            return action == "heating"
+
+        return state.state not in ("off",)
+
+    return state.state == "on"
+
+
+def is_room_cold(hass: HomeAssistant, config: dict) -> bool:
+    """Température intérieure <= consigne - écart pièce froide."""
+
+    temp = _numeric_state(hass, config.get(CONF_TEMP_INT))
+    target = _room_target(hass, config)
+
+    if temp is None or target is None:
+        return False
+
+    return temp <= target - _offset(config, CONF_COLD_OFFSET, DEFAULT_COLD_OFFSET)
+
+
+def is_room_hot(hass: HomeAssistant, config: dict) -> bool:
+    """Température intérieure > consigne + écart pièce chaude, alors que le
+    thermostat (et la chaudière, si configurée) sont en chauffe."""
+
+    temp = _numeric_state(hass, config.get(CONF_TEMP_INT))
+    target = _room_target(hass, config)
+
+    if temp is None or target is None:
+        return False
+
+    if temp <= target + _offset(config, CONF_HOT_OFFSET, DEFAULT_HOT_OFFSET):
+        return False
+
+    climate = hass.states.get(config.get(CONF_CLIMATE))
+
+    if climate is None or climate.attributes.get("hvac_action") != "heating":
+        return False
+
+    boiler_entity = get_central_boiler_entity(hass)
+
+    if boiler_entity and not is_boiler_heating(hass, boiler_entity):
+        return False
+
+    return True
 
 
 # ==========================================================
