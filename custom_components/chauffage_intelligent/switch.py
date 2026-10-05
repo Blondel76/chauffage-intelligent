@@ -59,6 +59,12 @@ class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
 
         self._attr_is_on = True
 
+        # Rattaché à l'appareil central (comme les compteurs de pièces).
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, "central")},
+            "name": "Chauffage Intelligent",
+        }
+
     async def async_added_to_hass(self) -> None:
         """Restore the previous state and apply it immediately."""
 
