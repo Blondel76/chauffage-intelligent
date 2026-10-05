@@ -350,8 +350,12 @@ def is_room_cold(hass: HomeAssistant, config: dict) -> bool:
 
 
 def is_room_hot(hass: HomeAssistant, config: dict) -> bool:
-    """Température intérieure > consigne + écart pièce chaude, alors que le
-    thermostat (et la chaudière, si configurée) sont en chauffe."""
+    """Température intérieure > consigne + écart pièce chaude, ET
+    (thermostat en chauffe OU chaudière en chauffe).
+
+    Le OU détecte une vanne/tête restée ouverte : la chaudière tourne et la
+    pièce chauffe pour rien, même si le thermostat ne demande plus de chauffe.
+    """
 
     temp = _numeric_state(hass, config.get(CONF_TEMP_INT))
     target = _room_target(hass, config)
@@ -363,16 +367,16 @@ def is_room_hot(hass: HomeAssistant, config: dict) -> bool:
         return False
 
     climate = hass.states.get(config.get(CONF_CLIMATE))
+    thermostat_heating = (
+        climate is not None and climate.attributes.get("hvac_action") == "heating"
+    )
 
-    if climate is None or climate.attributes.get("hvac_action") != "heating":
-        return False
+    if thermostat_heating:
+        return True
 
     boiler_entity = get_central_boiler_entity(hass)
 
-    if boiler_entity and not is_boiler_heating(hass, boiler_entity):
-        return False
-
-    return True
+    return bool(boiler_entity) and is_boiler_heating(hass, boiler_entity)
 
 
 # ==========================================================
