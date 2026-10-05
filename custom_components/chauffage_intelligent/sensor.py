@@ -11,6 +11,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -41,6 +42,7 @@ from .const import (
     ENTRY_TYPE_CENTRAL,
     ENTRY_TYPE_ROOM,
     SECURITY_STATE_OFF,
+    SIGNAL_CURRENT_PRESET,
     slugify_area,
 )
 from .security import compute_room_security_state, get_room_critical_entities
@@ -77,6 +79,7 @@ async def async_setup_entry(
             HeurePlanningPrecedentSensor(entry, area_slug),
             HeureAnticipeeSensor(entry, area_slug),
             SecuriteRoomSensor(entry, area_slug),
+            ChauffageActuelSensor(entry, area_slug),
             AerationSensor(entry, area_slug),
             HumiditeSensor(entry, area_slug),
         ]
@@ -277,6 +280,75 @@ class SecuriteRoomSensor(SensorEntity):
     async def async_update(self) -> None:
         """Mise à jour asynchrone standard."""
         self._update_state()
+
+
+# ==========================================================
+# PRESET ACTUEL (par pièce) : publié par le scheduler
+# ==========================================================
+
+
+class ChauffageActuelSensor(RestoreEntity, SensorEntity):
+    """Preset que la pièce DOIT avoir maintenant (publié par le scheduler).
+
+    Les attributs (créneau, anticipation, cible) sont restaurés au
+    redémarrage : le scheduler y relit la 'cible' pour reprendre une
+    anticipation en cours.
+    """
+
+    _attr_icon = "mdi:calendar-clock"
+    _attr_has_entity_name = True
+    _attr_name = "Chauffage actuel"
+    _attr_should_poll = False
+
+    _RESTORED_ATTRIBUTES = ("creneau", "anticipation", "cible")
+
+    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
+        """Initialize."""
+        self._entry = entry
+        self._area_slug = area_slug
+
+        self._attr_unique_id = f"{entry.entry_id}_chauffage_actuel"
+        self.entity_id = f"sensor.chauffage_actuel_{area_slug}"
+        self._attr_suggested_object_id = f"chauffage_actuel_{area_slug}"
+
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, area_slug)},
+            "name": area_slug.replace("_", " ").title(),
+        }
+
+        self._attr_native_value = None
+        self._attr_extra_state_attributes = {}
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last preset and listen to the scheduler."""
+        await super().async_added_to_hass()
+
+        last_state = await self.async_get_last_state()
+
+        if last_state is not None:
+            if last_state.state not in ("unknown", "unavailable"):
+                self._attr_native_value = last_state.state
+
+            self._attr_extra_state_attributes = {
+                key: last_state.attributes[key]
+                for key in self._RESTORED_ATTRIBUTES
+                if key in last_state.attributes
+            }
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_CURRENT_PRESET.format(self._entry.entry_id),
+                self._handle_update,
+            )
+        )
+
+    @callback
+    def _handle_update(self, preset: str | None, attributes: dict) -> None:
+        """New preset published by the scheduler."""
+        self._attr_native_value = preset
+        self._attr_extra_state_attributes = attributes
+        self.async_write_ha_state()
 
 
 # ==========================================================
