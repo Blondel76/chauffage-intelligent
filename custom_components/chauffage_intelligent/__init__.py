@@ -46,7 +46,7 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     scheduler = data.get("scheduler")
 
     if scheduler is not None:
-        await scheduler.apply_slot_for_now()
+        await scheduler.async_reconcile()
 
 
 async def async_setup_entry(
@@ -79,10 +79,10 @@ async def async_setup_entry(
         entry, ROOM_PLATFORMS
     )
 
-    scheduler = ChauffageScheduler(hass, entry)
+    scheduler = ChauffageScheduler(hass, entry, mode_selector)
 
     # Le resolver et le scheduler doivent être dans hass.data AVANT
-    # scheduler.start(), car apply_slot_for_now() y lit le resolver.
+    # scheduler.start(), car async_reconcile() y lit le resolver.
     hass.data[DOMAIN][entry.entry_id] = {
         "resolver": resolver,
         "scheduler": scheduler,
