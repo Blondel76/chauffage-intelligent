@@ -11,7 +11,6 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -27,6 +26,8 @@ from .calculations import (
     calculate_humidity_level,
     get_next_schedule,
     get_previous_schedule,
+    is_room_cold,
+    is_room_hot,
 )
 from .const import (
     CONF_AREA,
@@ -36,22 +37,16 @@ from .const import (
     COEFFICIENT_DEFAULT,
     DERIVE_INTERVAL_MINUTES,
     DOMAIN,
+    ENTRY_TYPE,
+    ENTRY_TYPE_CENTRAL,
+    ENTRY_TYPE_ROOM,
     SECURITY_STATE_OFF,
-    SIGNAL_CURRENT_PRESET,
     slugify_area,
 )
 from .security import compute_room_security_state, get_room_critical_entities
 
 SECURITY_CHECK_INTERVAL = timedelta(seconds=5)
-
-
-def _device_info(area_slug: str) -> dict:
-    """Device info shared by every entity of a room."""
-
-    return {
-        "identifiers": {(DOMAIN, area_slug)},
-        "name": area_slug.replace("_", " ").title(),
-    }
+COUNT_REFRESH_INTERVAL = timedelta(seconds=5)
 
 
 async def async_setup_entry(
@@ -59,13 +54,23 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Chauffage Intelligent sensors (room entries only)."""
+    """Set up Chauffage Intelligent sensors."""
 
-    area_slug = slugify_area(entry.data[CONF_AREA])
+    if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_CENTRAL:
+        async_add_entities(
+            [
+                PiecesEnChauffeSensor(entry),
+                PiecesFroidesSensor(entry),
+                PiecesChaudesSensor(entry),
+            ]
+        )
+        return
+
+    area_name = entry.data[CONF_AREA]
+    area_slug = slugify_area(area_name)
 
     async_add_entities(
         [
-            ChauffageActuelSensor(entry, area_slug),
             TempsDeChauffeSensor(entry, area_slug),
             DeriveSensor(entry, area_slug),
             HeurePlanningSensor(entry, area_slug),
@@ -79,12 +84,118 @@ async def async_setup_entry(
 
 
 # ==========================================================
+# COMPTEURS GLOBAUX (config centrale) : format "n/total"
+# ==========================================================
+
+
+class _CentralCountSensor(SensorEntity):
+    """Nombre de pièces répondant à un critère, au format 'n/total'."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    _key = ""
+    _label = ""
+
+    def __init__(self, entry: ConfigEntry) -> None:
+        """Initialize."""
+
+        self._entry = entry
+
+        self._attr_unique_id = f"{entry.entry_id}_{self._key}"
+        self._attr_name = self._label
+
+        self.entity_id = f"sensor.{self._key}"
+        self._attr_suggested_object_id = self._key
+
+        self._attr_native_value = "0/0"
+        self._attr_extra_state_attributes = {"pieces": []}
+
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, "central")},
+            "name": "Chauffage Intelligent",
+        }
+
+    def _matches(self, room_entry: ConfigEntry) -> bool:
+        """À surcharger : la pièce répond-elle au critère ?"""
+
+        raise NotImplementedError
+
+    async def async_added_to_hass(self) -> None:
+        """Refresh periodically (pièces ajoutées/retirées incluses)."""
+
+        await super().async_added_to_hass()
+
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass, self._handle_periodic, COUNT_REFRESH_INTERVAL
+            )
+        )
+
+        self._update_state()
+
+    @callback
+    def _update_state(self) -> None:
+        rooms = [
+            e
+            for e in self.hass.config_entries.async_entries(DOMAIN)
+            if e.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM
+        ]
+
+        matching = [e.title for e in rooms if self._matches(e)]
+
+        self._attr_native_value = f"{len(matching)}/{len(rooms)}"
+        self._attr_extra_state_attributes = {"pieces": matching}
+
+    @callback
+    def _handle_periodic(self, _now=None) -> None:
+        self._update_state()
+        self.async_write_ha_state()
+
+
+class PiecesEnChauffeSensor(_CentralCountSensor):
+    """Pièces dont le thermostat est en chauffe."""
+
+    _key = "pieces_en_chauffe"
+    _label = "Pièces en chauffe"
+    _attr_icon = "mdi:radiator"
+
+    def _matches(self, room_entry: ConfigEntry) -> bool:
+        config = {**room_entry.data, **room_entry.options}
+        state = self.hass.states.get(config.get(CONF_CLIMATE))
+
+        return state is not None and state.attributes.get("hvac_action") == "heating"
+
+
+class PiecesFroidesSensor(_CentralCountSensor):
+    """Pièces froides (température <= consigne - écart)."""
+
+    _key = "pieces_froides"
+    _label = "Pièces froides"
+    _attr_icon = "mdi:snowflake"
+
+    def _matches(self, room_entry: ConfigEntry) -> bool:
+        return is_room_cold(self.hass, {**room_entry.data, **room_entry.options})
+
+
+class PiecesChaudesSensor(_CentralCountSensor):
+    """Pièces chaudes (température > consigne + écart, en chauffe)."""
+
+    _key = "pieces_chaudes"
+    _label = "Pièces chaudes"
+    _attr_icon = "mdi:fire"
+
+    def _matches(self, room_entry: ConfigEntry) -> bool:
+        return is_room_hot(self.hass, {**room_entry.data, **room_entry.options})
+
+
+# ==========================================================
 # SECURITE (par pièce)
 # ==========================================================
 
 
 class SecuriteRoomSensor(SensorEntity):
-    """État de sécurité d'une pièce : gris (éteint) / vert (ok) / rouge (problème).
+    """État de sécurité d'une pièce : gris (éteint) / vert (ok) / orange (trop froide ou trop chaude) / rouge (problème).
 
     Recalculé en continu à partir de l'état réel des entités ; aucune
     mémoire/latch, donc aucun réarmement n'est nécessaire.
@@ -105,7 +216,12 @@ class SecuriteRoomSensor(SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_securite"
         self.entity_id = f"sensor.securite_{area_slug}"
         self._attr_suggested_object_id = f"securite_{area_slug}"
-        self._attr_device_info = _device_info(area_slug)
+
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, area_slug)},
+            "name": area_slug.replace("_", " ").title(),
+        }
+
         self._attr_native_value = SECURITY_STATE_OFF
 
     async def async_added_to_hass(self) -> None:
@@ -160,6 +276,10 @@ class SecuriteRoomSensor(SensorEntity):
         self._update_state()
         self.async_write_ha_state()
 
+    async def async_update(self) -> None:
+        """Mise à jour asynchrone standard."""
+        self._update_state()
+
 
 # ==========================================================
 # PIECE
@@ -186,7 +306,11 @@ class ChauffageSensorBase(SensorEntity):
 
         self.entity_id = f"sensor.{key}_{area_slug}"
         self._attr_suggested_object_id = f"{key}_{area_slug}"
-        self._attr_device_info = _device_info(area_slug)
+
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, area_slug)},
+            "name": area_slug.replace("_", " ").title(),
+        }
 
         self._attr_extra_state_attributes = {
             "chauffage_intelligent": True,
@@ -199,7 +323,8 @@ class ChauffageSensorBase(SensorEntity):
 
     def _read_coefficient(self) -> float:
         """Read the current coefficient number entity."""
-        coefficient_state = self.hass.states.get(f"number.coefficient_{self._area_slug}")
+        coefficient_entity = f"number.coefficient_{self._area_slug}"
+        coefficient_state = self.hass.states.get(coefficient_entity)
 
         if coefficient_state is not None:
             try:
@@ -218,52 +343,6 @@ class ChauffageSensorBase(SensorEntity):
             return ""
 
         return resolver.get_active_planning()
-
-
-class ChauffageActuelSensor(RestoreEntity, ChauffageSensorBase):
-    """Preset que la pièce doit avoir maintenant (planning + anticipation).
-
-    Mis à jour uniquement par le scheduler. Sert aussi de mémoire : l'attribut
-    `cible` conserve l'anticipation en cours pour qu'elle survive à un
-    redémarrage de Home Assistant.
-    """
-
-    _attr_icon = "mdi:radiator"
-    _attr_should_poll = False
-
-    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
-        """Initialize."""
-        super().__init__(entry, area_slug, "chauffage_actuel", "Chauffage actuel")
-
-        self._attr_native_value = None
-
-    async def async_added_to_hass(self) -> None:
-        """Restore the last state and listen for scheduler updates."""
-        await super().async_added_to_hass()
-
-        last_state = await self.async_get_last_state()
-
-        if last_state is not None and last_state.state not in ("unknown", "unavailable"):
-            self._attr_native_value = last_state.state
-
-            for key in ("creneau", "anticipation", "cible"):
-                if key in last_state.attributes:
-                    self._attr_extra_state_attributes[key] = last_state.attributes[key]
-
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                SIGNAL_CURRENT_PRESET.format(self._entry.entry_id),
-                self._handle_update,
-            )
-        )
-
-    @callback
-    def _handle_update(self, preset: str, attributes: dict) -> None:
-        """Receive the expected preset from the scheduler."""
-        self._attr_native_value = preset
-        self._attr_extra_state_attributes.update(attributes)
-        self.async_write_ha_state()
 
 
 class TempsDeChauffeSensor(ChauffageSensorBase):
@@ -393,7 +472,7 @@ class HeurePlanningPrecedentSensor(ChauffageSensorBase):
 
 
 class HeureAnticipeeSensor(ChauffageSensorBase):
-    """Anticipated heating time (affichage ; le scheduler la calcule de son côté)."""
+    """Anticipated heating time."""
 
     _attr_icon = "mdi:clock-start"
 
