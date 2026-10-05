@@ -2,6 +2,9 @@
 
 L'état de sécurité est désormais calculé par pièce, sans mémoire :
 il reflète toujours l'état réel courant (pas de "réarmement" nécessaire).
+
+Niveaux : gris (chauffage éteint) / vert (ok) / orange (pièce trop froide
+ou trop chaude) / rouge (panne : le chauffage de la pièce est bloqué).
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .calculations import is_room_cold, is_room_hot
 from .const import (
     CONF_BOILER_ENTITY,
     CONF_CLIMATE,
@@ -23,6 +27,7 @@ from .const import (
     SECURITY_STATE_CRITICAL,
     SECURITY_STATE_OFF,
     SECURITY_STATE_OK,
+    SECURITY_STATE_WARNING,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -147,11 +152,15 @@ def get_room_critical_entities(hass: HomeAssistant, room_entry: ConfigEntry) -> 
 
 
 def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) -> str:
-    """Calcule l'état de sécurité courant d'une pièce (gris/vert/rouge), sans mémoire.
+    """Calcule l'état de sécurité courant d'une pièce (gris/vert/orange/rouge), sans mémoire.
 
     La disponibilité des capteurs/vanne/chaudière est vérifiée en tout
     temps (été comme hiver), pas seulement quand le chauffage tourne, pour
     ne pas découvrir une panne seulement au premier démarrage hivernal.
+
+    Orange : chauffage censé être actif et pièce trop froide (température
+    <= consigne - écart froid) ou trop chaude (température > consigne +
+    écart chaud, thermostat/chaudière en chauffe).
     """
     config = {**room_entry.data, **room_entry.options}
     climate_entity = config.get(CONF_CLIMATE)
@@ -176,5 +185,8 @@ def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) ->
 
     if not heating_should_be_active:
         return SECURITY_STATE_OFF
+
+    if is_room_cold(hass, config) or is_room_hot(hass, config):
+        return SECURITY_STATE_WARNING
 
     return SECURITY_STATE_OK
