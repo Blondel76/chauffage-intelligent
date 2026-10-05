@@ -15,17 +15,21 @@ from .const import (
     CONF_AREA,
     CONF_BOILER_ENTITY,
     CONF_CLIMATE,
+    CONF_COLD_OFFSET,
     CONF_DOOR_SENSOR,
     CONF_GROUP_AREAS,
     CONF_GROUP_NAME,
     CONF_GROUP_THRESHOLD,
     CONF_HEATER_ENTITY,
     CONF_HEATING_TYPE,
+    CONF_HOT_OFFSET,
     CONF_MODE_PLANNINGS,
     CONF_MODE_SELECTOR,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
+    DEFAULT_COLD_OFFSET,
     DEFAULT_GROUP_THRESHOLD,
+    DEFAULT_HOT_OFFSET,
     DEFAULT_PLANNING,
     DOMAIN,
     ENTRY_TYPE,
@@ -97,6 +101,31 @@ def _plannings_schema(modes: list[str], existing: dict[str, str]) -> vol.Schema:
     }
 
     return vol.Schema(schema_dict)
+
+
+def _threshold_fields(defaults: dict | None = None) -> dict:
+    """Champs 'écart pièce froide' / 'écart pièce chaude' (°C), pré-remplis si besoin."""
+
+    defaults = defaults or {}
+
+    return {
+        vol.Required(
+            CONF_COLD_OFFSET,
+            default=defaults.get(CONF_COLD_OFFSET, DEFAULT_COLD_OFFSET),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=10, step=0.1, mode=selector.NumberSelectorMode.BOX
+            )
+        ),
+        vol.Required(
+            CONF_HOT_OFFSET,
+            default=defaults.get(CONF_HOT_OFFSET, DEFAULT_HOT_OFFSET),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=10, step=0.1, mode=selector.NumberSelectorMode.BOX
+            )
+        ),
+    }
 
 
 def _central_schema(defaults: dict | None = None) -> vol.Schema:
@@ -291,6 +320,8 @@ class ChauffageIntelligentConfigFlow(
                 vol.Optional(CONF_DOOR_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["binary_sensor"])
                 ),
+
+                **_threshold_fields(),
             }
         )
 
@@ -337,6 +368,7 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         """Initialize."""
 
         self.entry = config_entry
+        self._pending_thresholds: dict[str, Any] = {}
 
     async def async_step_init(
         self,
@@ -392,18 +424,37 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Same single-page planning editor, reused for edits."""
+        """Page 1/2 : écarts pièce froide / pièce chaude."""
+
+        if user_input is not None:
+            self._pending_thresholds = user_input
+            return await self.async_step_room_plannings()
+
+        return self.async_show_form(
+            step_id="room_options",
+            data_schema=vol.Schema(_threshold_fields(self.entry.data)),
+        )
+
+    async def async_step_room_plannings(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ):
+        """Page 2/2 : plannings (un champ par mode), puis sauvegarde de tout."""
 
         modes = _get_central_modes(self.hass)
         existing = self.entry.data.get(CONF_MODE_PLANNINGS, {})
 
         if user_input is not None:
             new_mode_plannings = {mode: user_input[mode] for mode in modes}
-            new_data = {**self.entry.data, CONF_MODE_PLANNINGS: new_mode_plannings}
+            new_data = {
+                **self.entry.data,
+                **self._pending_thresholds,
+                CONF_MODE_PLANNINGS: new_mode_plannings,
+            }
             self.hass.config_entries.async_update_entry(self.entry, data=new_data)
             return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
-            step_id="room_options",
+            step_id="room_plannings",
             data_schema=_plannings_schema(modes, existing),
         )
