@@ -39,6 +39,9 @@ DEFAULT_HOT_OFFSET = 0.5
 CONF_MODE_PLANNINGS = "mode_plannings"
 DEFAULT_PLANNING = "12:00|eco"
 
+"""Signal interne : preset courant publié par le scheduler (formaté avec l'entry_id)"""
+SIGNAL_CURRENT_PRESET = "chauffage_intelligent_current_preset_{}"
+
 """Types d'entrées pour la config sécurité"""
 SECURITY_STATE_OFF = "gris"
 SECURITY_STATE_OK = "vert"
