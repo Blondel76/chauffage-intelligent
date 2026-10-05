@@ -109,7 +109,6 @@ class _CentralCountSensor(SensorEntity):
         self._attr_suggested_object_id = self._key
 
         self._attr_native_value = "0/0"
-        self._attr_extra_state_attributes = {"pieces": []}
 
         self._attr_device_info = {
             "identifiers": {(DOMAIN, "central")},
@@ -142,10 +141,9 @@ class _CentralCountSensor(SensorEntity):
             if e.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM
         ]
 
-        matching = [e.title for e in rooms if self._matches(e)]
+        matching = sum(1 for e in rooms if self._matches(e))
 
-        self._attr_native_value = f"{len(matching)}/{len(rooms)}"
-        self._attr_extra_state_attributes = {"pieces": matching}
+        self._attr_native_value = f"{matching}/{len(rooms)}"
 
     @callback
     def _handle_periodic(self, _now=None) -> None:
@@ -179,7 +177,7 @@ class PiecesFroidesSensor(_CentralCountSensor):
 
 
 class PiecesChaudesSensor(_CentralCountSensor):
-    """Pièces chaudes (température > consigne + écart, en chauffe)."""
+    """Pièces chaudes (température > consigne + écart, thermostat ou chaudière en chauffe)."""
 
     _key = "pieces_chaudes"
     _label = "Pièces chaudes"
