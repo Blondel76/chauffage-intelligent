@@ -15,14 +15,14 @@ from .const import (
 from .resolver import PlanningResolver
 from .scheduler import ChauffageScheduler
 
-PLATFORMS_CENTRAL = ["switch"]
-PLATFORMS_ROOM = ["sensor", "number", "switch"]
+CENTRAL_PLATFORMS = ["switch", "sensor"]
+ROOM_PLATFORMS = ["sensor", "number", "switch", "binary_sensor"]
 
 
 def _preload_platforms() -> None:
     """Import platform modules ahead of time (blocking, run in executor)."""
 
-    from . import number, sensor, switch  # noqa: F401
+    from . import binary_sensor, number, sensor, switch  # noqa: F401
 
 
 def _get_central_mode_selector(hass: HomeAssistant) -> str | None:
@@ -36,7 +36,7 @@ def _get_central_mode_selector(hass: HomeAssistant) -> str | None:
 
 
 async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Réévalue le planning quand la configuration d'une pièce est modifiée."""
+    """Réapplique le créneau en cours quand le planning d'une pièce est modifié."""
 
     data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
 
@@ -46,7 +46,7 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     scheduler = data.get("scheduler")
 
     if scheduler is not None:
-        await scheduler.async_reconcile()
+        await scheduler.apply_slot_for_now()
 
 
 async def async_setup_entry(
@@ -66,27 +66,31 @@ async def async_setup_entry(
     await hass.async_add_executor_job(_preload_platforms)
 
     if entry_type == ENTRY_TYPE_CENTRAL:
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS_CENTRAL)
+        await hass.config_entries.async_forward_entry_setups(
+            entry, CENTRAL_PLATFORMS
+        )
         hass.data[DOMAIN][entry.entry_id] = {}
         return True
 
     mode_selector = _get_central_mode_selector(hass)
-
     resolver = PlanningResolver(hass, entry, mode_selector)
-    scheduler = ChauffageScheduler(hass, entry, mode_selector)
 
-    # Le resolver doit être disponible AVANT les plateformes (les capteurs
-    # de planning le lisent) et le scheduler avant son démarrage.
+    await hass.config_entries.async_forward_entry_setups(
+        entry, ROOM_PLATFORMS
+    )
+
+    scheduler = ChauffageScheduler(hass, entry)
+
+    # Le resolver et le scheduler doivent être dans hass.data AVANT
+    # scheduler.start(), car apply_slot_for_now() y lit le resolver.
     hass.data[DOMAIN][entry.entry_id] = {
         "resolver": resolver,
         "scheduler": scheduler,
     }
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS_ROOM)
-
     scheduler.start()
 
-    # Modification d'un planning (options flow) -> réévaluation immédiate.
+    # Sauvegarde d'un planning (options flow) -> applique le créneau en cours.
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
     return True
@@ -104,13 +108,24 @@ async def async_unload_entry(
         hass.data[DOMAIN].pop(entry.entry_id, None)
         return True
 
-    platforms = PLATFORMS_CENTRAL if entry_type == ENTRY_TYPE_CENTRAL else PLATFORMS_ROOM
-    unloaded = await hass.config_entries.async_unload_platforms(entry, platforms)
+    if entry_type == ENTRY_TYPE_CENTRAL:
+        unloaded = await hass.config_entries.async_unload_platforms(
+            entry, CENTRAL_PLATFORMS
+        )
+
+        if unloaded:
+            hass.data[DOMAIN].pop(entry.entry_id, None)
+
+        return unloaded
+
+    unloaded = await hass.config_entries.async_unload_platforms(
+        entry, ROOM_PLATFORMS
+    )
 
     if unloaded:
         data = hass.data[DOMAIN].pop(entry.entry_id, None)
 
-        if data and data.get("scheduler") is not None:
+        if data is not None:
             data["scheduler"].stop()
 
     return unloaded
