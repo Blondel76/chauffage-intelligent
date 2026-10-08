@@ -21,6 +21,18 @@ from .const import (
 )
 
 
+def _is_window_open(hass: HomeAssistant, room_entry: ConfigEntry) -> bool:
+    """True si la fenêtre/porte de la pièce est ouverte (capteur ou interrupteur manuel)."""
+
+    entity_id = room_entry.data.get(CONF_DOOR_SENSOR) or (
+        f"switch.fenetre_ouverte_{slugify_area(room_entry.data[CONF_AREA])}"
+    )
+
+    state = hass.states.get(entity_id)
+
+    return state is not None and state.state == "on"
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -90,7 +102,12 @@ class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
         await self._apply_to_all_rooms("off")
 
     async def _apply_to_all_rooms(self, hvac_mode: str) -> None:
-        """Apply the given hvac_mode to every room's climate entity (and its valve, if any)."""
+        """Apply the given hvac_mode to every room's climate entity (and its valve, if any).
+
+        En remise en chauffe ("heat"), les pièces dont la fenêtre/porte est
+        ouverte sont ignorées : elles repasseront en chauffe à la fermeture
+        (cf. scheduler._handle_window_change).
+        """
 
         for room_entry in self.hass.config_entries.async_entries(DOMAIN):
             if room_entry.data.get(ENTRY_TYPE) != ENTRY_TYPE_ROOM:
@@ -99,6 +116,9 @@ class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
             climate_entity = room_entry.data.get(CONF_CLIMATE)
 
             if not climate_entity:
+                continue
+
+            if hvac_mode == "heat" and _is_window_open(self.hass, room_entry):
                 continue
 
             await self.hass.services.async_call(
