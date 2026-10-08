@@ -35,12 +35,28 @@ CONF_HOT_OFFSET = "Écart pièce chaude (°C au-dessus de la consigne)"
 DEFAULT_COLD_OFFSET = 1.0
 DEFAULT_HOT_OFFSET = 0.5
 
+"""Suivi « la température ne monte pas » (réglable par pièce, dans l'UI de la pièce)"""
+CONF_NO_RISE_DELAY = "Délai sans montée de température (min)"
+CONF_NO_RISE_DELTA = "Gain minimal de température (°C)"
+DEFAULT_NO_RISE_DELAY = 10
+DEFAULT_NO_RISE_DELTA = 0.2
+"""Défaut aussi déclaré si la chauffe dure plus de ce multiple du temps de chauffe estimé"""
+NO_RISE_ESTIMATE_FACTOR = 1.5
+FAULT_REASON_NO_RISE = "no_rise"
+FAULT_REASON_TOO_LONG = "too_long"
+
+"""Chaudière en chauffe alors qu'aucun thermostat ne demande de chauffe (alerte centrale)"""
+BOILER_NO_DEMAND_GRACE_MINUTES = 5
+
 """Types d'entrées pour les planning"""
 CONF_MODE_PLANNINGS = "mode_plannings"
 DEFAULT_PLANNING = "12:00|eco"
 
 """Signal interne : preset courant publié par le scheduler (formaté avec l'entry_id)"""
 SIGNAL_CURRENT_PRESET = "chauffage_intelligent_current_preset_{}"
+
+"""Signal interne : défaut verrouillé d'une pièce modifié (formaté avec l'entry_id)"""
+SIGNAL_ROOM_FAULT = "chauffage_intelligent_room_fault_{}"
 
 """Types d'entrées pour la config sécurité"""
 SECURITY_STATE_OFF = "gris"
