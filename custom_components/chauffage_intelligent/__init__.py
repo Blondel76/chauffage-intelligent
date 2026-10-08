@@ -11,6 +11,7 @@ from .const import (
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
     ENTRY_TYPE_GROUP,
+    ENTRY_TYPE_ROOM,
 )
 from .resolver import PlanningResolver
 from .scheduler import ChauffageScheduler
@@ -49,6 +50,21 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await scheduler.async_reconcile()
 
 
+async def _async_central_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """La config centrale a changé : recharger les pièces.
+
+    Le resolver et le scheduler de chaque pièce mémorisent l'entité
+    sélecteur de mode à leur création ; un rechargement leur fait relire
+    la nouvelle valeur.
+    """
+
+    for room_entry in hass.config_entries.async_entries(DOMAIN):
+        if room_entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM:
+            hass.async_create_task(
+                hass.config_entries.async_reload(room_entry.entry_id)
+            )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -70,6 +86,11 @@ async def async_setup_entry(
             entry, CENTRAL_PLATFORMS
         )
         hass.data[DOMAIN][entry.entry_id] = {}
+
+        # Modification de la config centrale (ex. sélecteur de mode)
+        # -> les pièces doivent être rechargées.
+        entry.async_on_unload(entry.add_update_listener(_async_central_updated))
+
         return True
 
     mode_selector = _get_central_mode_selector(hass)
