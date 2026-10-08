@@ -481,22 +481,36 @@ class ChauffageScheduler:
     async def _handle_window_change(
         self, event: Event[EventStateChangedData]
     ) -> None:
-        """Cut or restore heating when the window/door state changes."""
+        """Cut or restore heating when the window/door state changes.
+
+        - Un capteur indisponible/inconnu ne change rien (ni coupure, ni
+          remise en chauffe).
+        - À la fermeture, la pièce n'est remise en chauffe que si le
+          chauffage général est allumé.
+        """
 
         if not self.climate_entity:
             return
 
         new_state = event.data.get("new_state")
 
-        if new_state is None:
+        if new_state is None or new_state.state in ("unknown", "unavailable"):
             return
 
-        is_open = new_state.state == "on"
+        if new_state.state == "on":
+            hvac_mode = "off"
+        else:
+            general = self.hass.states.get("switch.chauffage_general")
+
+            if general is not None and general.state == "off":
+                return
+
+            hvac_mode = "heat"
 
         await self.hass.services.async_call(
             "climate",
             "set_hvac_mode",
-            {"entity_id": self.climate_entity, "hvac_mode": "off" if is_open else "heat"},
+            {"entity_id": self.climate_entity, "hvac_mode": hvac_mode},
         )
 
     # ------------------------------------------------------------
