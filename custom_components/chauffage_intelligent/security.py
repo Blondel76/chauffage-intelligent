@@ -5,6 +5,10 @@ il reflète toujours l'état réel courant (pas de "réarmement" nécessaire).
 
 Niveaux : gris (chauffage éteint) / vert (ok) / orange (pièce trop froide
 ou trop chaude) / rouge (panne : le chauffage de la pièce est bloqué).
+
+Seul le défaut « la température ne monte pas » (cf. heating_monitor.py) a
+une mémoire : il reste rouge jusqu'au réarmement manuel de la pièce. Toutes
+les autres causes sont recalculées en continu.
 """
 
 from __future__ import annotations
@@ -43,12 +47,12 @@ def _get_central_boiler_entity(hass: HomeAssistant) -> str | None:
     return None
 
 
-def _central_boiler_ok(hass: HomeAssistant) -> bool:
-    """Vérifie que la chaudière centrale (si configurée) est disponible."""
+def _central_boiler_problem(hass: HomeAssistant) -> str | None:
+    """Retourne le problème de la chaudière centrale (si configurée), ou None."""
     boiler_entity = _get_central_boiler_entity(hass)
 
     if not boiler_entity:
-        return True
+        return None
 
     state = hass.states.get(boiler_entity)
 
@@ -56,7 +60,7 @@ def _central_boiler_ok(hass: HomeAssistant) -> bool:
         _LOGGER.warning(
             "[Sécurité] Entité chaudière introuvable dans HA : %s", boiler_entity
         )
-        return False
+        return f"Chaudière introuvable : {boiler_entity}"
 
     if state.state in ("unknown", "unavailable"):
         _LOGGER.warning(
@@ -64,15 +68,15 @@ def _central_boiler_ok(hass: HomeAssistant) -> bool:
             boiler_entity,
             state.state,
         )
-        return False
+        return f"Chaudière indisponible : {boiler_entity}"
 
-    return True
+    return None
 
 
-def _room_critical_entities_ok(
+def _room_critical_problems(
     hass: HomeAssistant, config: dict, heating_should_be_active: bool
-) -> bool:
-    """Vérifie température int/ext, vanne/interrupteur et capteur de porte de la pièce.
+) -> list[str]:
+    """Liste les problèmes de température int/ext, vanne/interrupteur et capteur de porte.
 
     La disponibilité (introuvable/unknown/unavailable) est vérifiée en tout
     temps, été comme hiver, pour détecter une panne avant même le premier
@@ -82,6 +86,8 @@ def _room_critical_entities_ok(
     général ou le climate de la pièce) est un comportement normal, pas une
     panne.
     """
+    problems: list[str] = []
+
     for key in (
         CONF_TEMP_INT,
         CONF_TEMP_EXT,
@@ -97,7 +103,8 @@ def _room_critical_entities_ok(
 
         if state is None:
             _LOGGER.warning("[Sécurité] Entité introuvable dans HA : %s", entity_id)
-            return False
+            problems.append(f"Entité introuvable : {entity_id}")
+            continue
 
         if state.state in ("unknown", "unavailable"):
             _LOGGER.warning(
@@ -105,7 +112,8 @@ def _room_critical_entities_ok(
                 entity_id,
                 state.state,
             )
-            return False
+            problems.append(f"Entité indisponible : {entity_id}")
+            continue
 
         # Une vanne pilotée en climate (chauffage gaz) n'est mise en
         # hvac_mode "off" par l'intégration elle-même QUE lorsque le
@@ -119,9 +127,9 @@ def _room_critical_entities_ok(
             and state.state == "off"
         ):
             _LOGGER.warning("[Sécurité] Vanne coupée manuellement : %s", entity_id)
-            return False
+            problems.append(f"Vanne coupée manuellement : {entity_id}")
 
-    return True
+    return problems
 
 
 def get_room_critical_entities(hass: HomeAssistant, room_entry: ConfigEntry) -> list[str]:
@@ -151,8 +159,19 @@ def get_room_critical_entities(hass: HomeAssistant, room_entry: ConfigEntry) -> 
     return list(entities)
 
 
-def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) -> str:
-    """Calcule l'état de sécurité courant d'une pièce (gris/vert/orange/rouge), sans mémoire.
+def _get_room_monitor(hass: HomeAssistant, room_entry: ConfigEntry):
+    """Retourne le suivi de montée en température de la pièce, s'il existe."""
+    return hass.data.get(DOMAIN, {}).get(room_entry.entry_id, {}).get("monitor")
+
+
+def compute_room_security(
+    hass: HomeAssistant, room_entry: ConfigEntry
+) -> tuple[str, list[str]]:
+    """Calcule l'état de sécurité courant d'une pièce et ses raisons.
+
+    Retourne (état gris/vert/orange/rouge, liste des raisons). Aucune
+    mémoire, sauf le défaut verrouillé de montée en température, qui reste
+    rouge jusqu'au réarmement de la pièce.
 
     La disponibilité des capteurs/vanne/chaudière est vérifiée en tout
     temps (été comme hiver), pas seulement quand le chauffage tourne, pour
@@ -160,7 +179,8 @@ def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) ->
 
     Orange : chauffage censé être actif et pièce trop froide (température
     <= consigne - écart froid) ou trop chaude (température > consigne +
-    écart chaud, thermostat/chaudière en chauffe).
+    écart chaud, thermostat en chauffe, ou chaudière en chauffe avec la
+    vanne de la pièce ouverte).
     """
     config = {**room_entry.data, **room_entry.options}
     climate_entity = config.get(CONF_CLIMATE)
@@ -170,23 +190,48 @@ def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) ->
         _LOGGER.warning(
             "[Sécurité] Thermostat introuvable ou indisponible : %s", climate_entity
         )
-        return SECURITY_STATE_CRITICAL
+        return (
+            SECURITY_STATE_CRITICAL,
+            [f"Thermostat introuvable ou indisponible : {climate_entity}"],
+        )
 
     switch_state = hass.states.get("switch.chauffage_general")
     master_on = switch_state is not None and switch_state.state == "on"
     room_on = climate_state.state != "off"
     heating_should_be_active = master_on and room_on
 
-    if not _room_critical_entities_ok(hass, config, heating_should_be_active):
-        return SECURITY_STATE_CRITICAL
+    problems = _room_critical_problems(hass, config, heating_should_be_active)
 
-    if not _central_boiler_ok(hass):
-        return SECURITY_STATE_CRITICAL
+    boiler_problem = _central_boiler_problem(hass)
+
+    if boiler_problem:
+        problems.append(boiler_problem)
+
+    monitor = _get_room_monitor(hass, room_entry)
+
+    if monitor is not None and monitor.fault:
+        problems.append(monitor.fault_label)
+
+    if problems:
+        return SECURITY_STATE_CRITICAL, problems
 
     if not heating_should_be_active:
-        return SECURITY_STATE_OFF
+        return SECURITY_STATE_OFF, []
 
-    if is_room_cold(hass, config) or is_room_hot(hass, config):
-        return SECURITY_STATE_WARNING
+    warnings: list[str] = []
 
-    return SECURITY_STATE_OK
+    if is_room_cold(hass, config):
+        warnings.append("Pièce froide")
+
+    if is_room_hot(hass, config):
+        warnings.append("Pièce chaude")
+
+    if warnings:
+        return SECURITY_STATE_WARNING, warnings
+
+    return SECURITY_STATE_OK, []
+
+
+def compute_room_security_state(hass: HomeAssistant, room_entry: ConfigEntry) -> str:
+    """Calcule l'état de sécurité courant d'une pièce (gris/vert/orange/rouge)."""
+    return compute_room_security(hass, room_entry)[0]
