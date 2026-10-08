@@ -20,12 +20,14 @@ from .const import (
     COEFFICIENT_MAX,
     DEFAULT_COLD_OFFSET,
     DEFAULT_HOT_OFFSET,
+    CONF_HEATER_ENTITY,
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
     HUMIDITE_SEUIL_ELEVEE,
     HUMIDITE_SEUIL_EXCESSIVE,
     HUMIDITE_SEUIL_TRES_ELEVEE,
+    VALVE_OPEN_TEMP,
 )
 
 
@@ -337,6 +339,28 @@ def is_boiler_heating(hass: HomeAssistant, boiler_entity: str) -> bool:
     return state.state == "on"
 
 
+def is_heater_open(hass: HomeAssistant, heater_entity: str | None) -> bool:
+    """True si la vanne/l'interrupteur du radiateur est disponible ET ouvert.
+
+    Vanne en climate : ouverte quand sa consigne vaut VALVE_OPEN_TEMP.
+    Interrupteur : ouvert quand il est 'on'. Entité absente ou
+    indisponible : False.
+    """
+
+    if not heater_entity:
+        return False
+
+    state = hass.states.get(heater_entity)
+
+    if state is None or state.state in ("unknown", "unavailable"):
+        return False
+
+    if heater_entity.startswith("climate."):
+        return state.attributes.get("temperature") == VALVE_OPEN_TEMP
+
+    return state.state == "on"
+
+
 def is_room_cold(hass: HomeAssistant, config: dict) -> bool:
     """Température intérieure <= consigne - écart pièce froide."""
 
@@ -351,10 +375,17 @@ def is_room_cold(hass: HomeAssistant, config: dict) -> bool:
 
 def is_room_hot(hass: HomeAssistant, config: dict) -> bool:
     """Température intérieure > consigne + écart pièce chaude, ET
-    (thermostat en chauffe OU chaudière en chauffe).
+    (thermostat en chauffe OU (chaudière en chauffe ET vanne/interrupteur
+    de la pièce disponible et ouvert)).
 
-    Le OU détecte une vanne/tête restée ouverte : la chaudière tourne et la
-    pièce chauffe pour rien, même si le thermostat ne demande plus de chauffe.
+    Le second cas détecte une vanne/tête restée ouverte : la chaudière
+    tourne et la pièce chauffe pour rien, même si le thermostat ne demande
+    plus de chauffe. Une pièce chaude à cause du soleil, avec un thermostat
+    disponible sans demande et une vanne disponible et fermée, n'est PAS
+    signalée, même si la chaudière tourne pour d'autres pièces.
+
+    Une vanne indisponible n'est pas traitée ici : la sécurité de la pièce
+    passe déjà au rouge dans ce cas.
     """
 
     temp = _numeric_state(hass, config.get(CONF_TEMP_INT))
@@ -376,7 +407,10 @@ def is_room_hot(hass: HomeAssistant, config: dict) -> bool:
 
     boiler_entity = get_central_boiler_entity(hass)
 
-    return bool(boiler_entity) and is_boiler_heating(hass, boiler_entity)
+    if not boiler_entity or not is_boiler_heating(hass, boiler_entity):
+        return False
+
+    return is_heater_open(hass, config.get(CONF_HEATER_ENTITY))
 
 
 # ==========================================================
