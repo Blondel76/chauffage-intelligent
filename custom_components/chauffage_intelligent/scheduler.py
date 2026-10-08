@@ -427,16 +427,35 @@ class ChauffageScheduler:
     # Déclencheurs
     # ------------------------------------------------------------
 
-    async def _handle_minute_tick(self, _now) -> None:
-        """Chaque minute : réévalue le planning et l'entité de chauffe.
+    def _get_monitor(self):
+        """Return this room's heating monitor (suivi de montée en température)."""
 
+        data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+
+        return data.get("monitor")
+
+    async def async_refresh(self) -> None:
+        """Réévalue l'entité de chauffe puis le planning (utilisé aussi au réarmement)."""
+
+        await self._update_heater()
+        await self.async_reconcile()
+
+    async def _handle_minute_tick(self, _now) -> None:
+        """Chaque minute : suivi de montée, entité de chauffe et planning.
+
+        Le suivi de montée en température passe en premier : un défaut
+        déclaré bloque la vanne dans le même passage (sécurité rouge).
         Réévaluer l'entité de chauffe chaque minute permet aussi de détecter
         les emprunts de chaleur entre pièces d'un groupe sans écouter chaque
         thermostat lié.
         """
 
-        await self._update_heater()
-        await self.async_reconcile()
+        monitor = self._get_monitor()
+
+        if monitor is not None:
+            monitor.evaluate()
+
+        await self.async_refresh()
 
     async def _handle_mode_change(
         self, event: Event[EventStateChangedData]
@@ -567,7 +586,8 @@ class ChauffageScheduler:
         # Sécurité : même si le thermostat demande à chauffer, on
         # n'ouvre jamais la vanne/l'interrupteur tant que la pièce est
         # en alarme rouge (capteur indisponible, vanne déjà coupée
-        # manuellement, chaudière indisponible...).
+        # manuellement, chaudière indisponible, défaut de montée en
+        # température non réarmé...).
         if compute_room_security_state(self.hass, self.entry) == SECURITY_STATE_CRITICAL:
             should_activate = False
 
