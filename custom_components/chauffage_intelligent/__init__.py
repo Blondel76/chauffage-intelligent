@@ -13,17 +13,18 @@ from .const import (
     ENTRY_TYPE_GROUP,
     ENTRY_TYPE_ROOM,
 )
+from .heating_monitor import RoomHeatingMonitor
 from .resolver import PlanningResolver
 from .scheduler import ChauffageScheduler
 
-CENTRAL_PLATFORMS = ["switch", "sensor"]
-ROOM_PLATFORMS = ["sensor", "number", "switch", "binary_sensor"]
+CENTRAL_PLATFORMS = ["switch", "sensor", "binary_sensor"]
+ROOM_PLATFORMS = ["sensor", "number", "switch", "binary_sensor", "button"]
 
 
 def _preload_platforms() -> None:
     """Import platform modules ahead of time (blocking, run in executor)."""
 
-    from . import binary_sensor, number, sensor, switch  # noqa: F401
+    from . import binary_sensor, button, number, sensor, switch  # noqa: F401
 
 
 def _get_central_mode_selector(hass: HomeAssistant) -> str | None:
@@ -96,6 +97,12 @@ async def async_setup_entry(
     mode_selector = _get_central_mode_selector(hass)
     resolver = PlanningResolver(hass, entry, mode_selector)
 
+    # Le suivi de montée en température doit exister AVANT les plateformes :
+    # l'entité « Défaut chauffe » y restaure un défaut non réarmé, et le
+    # capteur de sécurité le consulte.
+    monitor = RoomHeatingMonitor(hass, entry)
+    hass.data[DOMAIN][entry.entry_id] = {"monitor": monitor}
+
     await hass.config_entries.async_forward_entry_setups(
         entry, ROOM_PLATFORMS
     )
@@ -107,6 +114,7 @@ async def async_setup_entry(
     hass.data[DOMAIN][entry.entry_id] = {
         "resolver": resolver,
         "scheduler": scheduler,
+        "monitor": monitor,
     }
 
     scheduler.start()
@@ -146,7 +154,9 @@ async def async_unload_entry(
     if unloaded:
         data = hass.data[DOMAIN].pop(entry.entry_id, None)
 
-        if data is not None:
-            data["scheduler"].stop()
+        scheduler = data.get("scheduler") if data is not None else None
+
+        if scheduler is not None:
+            scheduler.stop()
 
     return unloaded
