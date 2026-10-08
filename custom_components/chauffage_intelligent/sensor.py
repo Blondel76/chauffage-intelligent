@@ -43,9 +43,10 @@ from .const import (
     ENTRY_TYPE_ROOM,
     SECURITY_STATE_OFF,
     SIGNAL_CURRENT_PRESET,
+    SIGNAL_ROOM_FAULT,
     slugify_area,
 )
-from .security import compute_room_security_state, get_room_critical_entities
+from .security import compute_room_security, get_room_critical_entities
 
 SECURITY_CHECK_INTERVAL = timedelta(seconds=5)
 COUNT_REFRESH_INTERVAL = timedelta(seconds=5)
@@ -198,8 +199,10 @@ class PiecesChaudesSensor(_CentralCountSensor):
 class SecuriteRoomSensor(SensorEntity):
     """État de sécurité d'une pièce : gris (éteint) / vert (ok) / orange (trop froide ou trop chaude) / rouge (problème).
 
-    Recalculé en continu à partir de l'état réel des entités ; aucune
-    mémoire/latch, donc aucun réarmement n'est nécessaire.
+    Recalculé en continu à partir de l'état réel des entités. Seul le défaut
+    « la température ne monte pas » est verrouillé : il reste rouge jusqu'au
+    réarmement de la pièce (bouton). L'attribut "raisons" liste les causes
+    de l'état orange ou rouge.
     """
 
     _attr_icon = "mdi:shield-check"
@@ -224,10 +227,20 @@ class SecuriteRoomSensor(SensorEntity):
         }
 
         self._attr_native_value = SECURITY_STATE_OFF
+        self._attr_extra_state_attributes = {"raisons": []}
 
     async def async_added_to_hass(self) -> None:
         """Start security monitoring for this room."""
         await super().async_added_to_hass()
+
+        # Défaut de montée en température déclaré, restauré ou réarmé.
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_ROOM_FAULT.format(self._entry.entry_id),
+                self._handle_fault_change,
+            )
+        )
 
         entites_a_surveiller = get_room_critical_entities(self.hass, self._entry)
 
@@ -263,7 +276,16 @@ class SecuriteRoomSensor(SensorEntity):
     @callback
     def _update_state(self) -> None:
         """Calcule et met à jour la valeur interne sans écrire sur le bus."""
-        self._attr_native_value = compute_room_security_state(self.hass, self._entry)
+        state, reasons = compute_room_security(self.hass, self._entry)
+
+        self._attr_native_value = state
+        self._attr_extra_state_attributes = {"raisons": reasons}
+
+    @callback
+    def _handle_fault_change(self) -> None:
+        """Le suivi de montée en température a déclaré ou levé un défaut."""
+        self._update_state()
+        self.async_write_ha_state()
 
     @callback
     def _async_periodic_security_check(self, _now=None) -> None:
