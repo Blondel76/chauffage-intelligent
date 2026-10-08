@@ -25,11 +25,15 @@ from .const import (
     CONF_HOT_OFFSET,
     CONF_MODE_PLANNINGS,
     CONF_MODE_SELECTOR,
+    CONF_NO_RISE_DELAY,
+    CONF_NO_RISE_DELTA,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
     DEFAULT_COLD_OFFSET,
     DEFAULT_GROUP_THRESHOLD,
     DEFAULT_HOT_OFFSET,
+    DEFAULT_NO_RISE_DELAY,
+    DEFAULT_NO_RISE_DELTA,
     DEFAULT_PLANNING,
     DOMAIN,
     ENTRY_TYPE,
@@ -104,7 +108,11 @@ def _plannings_schema(modes: list[str], existing: dict[str, str]) -> vol.Schema:
 
 
 def _threshold_fields(defaults: dict | None = None) -> dict:
-    """Champs 'écart pièce froide' / 'écart pièce chaude' (°C), pré-remplis si besoin."""
+    """Champs réglables d'une pièce, pré-remplis si besoin.
+
+    - écart pièce froide / pièce chaude (°C)
+    - suivi « la température ne monte pas » : délai (min) et gain minimal (°C)
+    """
 
     defaults = defaults or {}
 
@@ -123,6 +131,26 @@ def _threshold_fields(defaults: dict | None = None) -> dict:
         ): selector.NumberSelector(
             selector.NumberSelectorConfig(
                 min=0, max=10, step=0.1, mode=selector.NumberSelectorMode.BOX
+            )
+        ),
+        vol.Required(
+            CONF_NO_RISE_DELAY,
+            default=defaults.get(CONF_NO_RISE_DELAY, DEFAULT_NO_RISE_DELAY),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1,
+                max=120,
+                step=1,
+                unit_of_measurement="min",
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Required(
+            CONF_NO_RISE_DELTA,
+            default=defaults.get(CONF_NO_RISE_DELTA, DEFAULT_NO_RISE_DELTA),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0.1, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
             )
         ),
     }
@@ -424,7 +452,7 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Page 1/2 : écarts pièce froide / pièce chaude."""
+        """Page 1/2 : écarts pièce froide / pièce chaude et suivi de montée en température."""
 
         if user_input is not None:
             self._pending_thresholds = user_input
