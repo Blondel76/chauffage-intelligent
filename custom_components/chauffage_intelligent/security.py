@@ -36,6 +36,30 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Problèmes déjà signalés dans le journal : un même problème n'est logué
+# qu'une fois tant qu'il persiste (le calcul de sécurité tourne toutes les
+# 5 secondes, sans cela le journal serait saturé). L'état reste visible via
+# le capteur de sécurité (rouge + attribut "raisons").
+_REPORTED: set[str] = set()
+
+
+def _warn_once(key: str, message: str, *args) -> None:
+    """Logue un avertissement une seule fois tant que le problème persiste."""
+
+    if key in _REPORTED:
+        return
+
+    _REPORTED.add(key)
+    _LOGGER.warning(message, *args)
+
+
+def _clear_reported(key: str) -> None:
+    """Le problème a disparu : il pourra être re-signalé s'il revient."""
+
+    if key in _REPORTED:
+        _REPORTED.discard(key)
+        _LOGGER.info("[Sécurité] Problème résolu (%s)", key)
+
 
 def _get_central_boiler_entity(hass: HomeAssistant) -> str | None:
     """Récupère l'entité chaudière déclarée dans la config centrale (si configurée)."""
@@ -57,18 +81,24 @@ def _central_boiler_problem(hass: HomeAssistant) -> str | None:
     state = hass.states.get(boiler_entity)
 
     if state is None:
-        _LOGGER.warning(
-            "[Sécurité] Entité chaudière introuvable dans HA : %s", boiler_entity
+        _warn_once(
+            f"boiler_missing:{boiler_entity}",
+            "[Sécurité] Entité chaudière introuvable dans HA : %s",
+            boiler_entity,
         )
         return f"Chaudière introuvable : {boiler_entity}"
 
     if state.state in ("unknown", "unavailable"):
-        _LOGGER.warning(
+        _warn_once(
+            f"boiler_unavailable:{boiler_entity}",
             "[Sécurité] Chaudière indisponible : %s (état : %s)",
             boiler_entity,
             state.state,
         )
         return f"Chaudière indisponible : {boiler_entity}"
+
+    _clear_reported(f"boiler_missing:{boiler_entity}")
+    _clear_reported(f"boiler_unavailable:{boiler_entity}")
 
     return None
 
@@ -102,12 +132,17 @@ def _room_critical_problems(
         state = hass.states.get(entity_id)
 
         if state is None:
-            _LOGGER.warning("[Sécurité] Entité introuvable dans HA : %s", entity_id)
+            _warn_once(
+                f"missing:{entity_id}",
+                "[Sécurité] Entité introuvable dans HA : %s",
+                entity_id,
+            )
             problems.append(f"Entité introuvable : {entity_id}")
             continue
 
         if state.state in ("unknown", "unavailable"):
-            _LOGGER.warning(
+            _warn_once(
+                f"unavailable:{entity_id}",
                 "[Sécurité] Entité indisponible : %s (état : %s)",
                 entity_id,
                 state.state,
@@ -115,19 +150,31 @@ def _room_critical_problems(
             problems.append(f"Entité indisponible : {entity_id}")
             continue
 
+        # Entité de nouveau disponible : on réinitialise ses signalements.
+        _clear_reported(f"missing:{entity_id}")
+        _clear_reported(f"unavailable:{entity_id}")
+
         # Une vanne pilotée en climate (chauffage gaz) n'est mise en
         # hvac_mode "off" par l'intégration elle-même QUE lorsque le
         # chauffage est globalement coupé (cf. switch.py). La voir passer
         # à "off" alors que le chauffage devrait être actif signifie donc
         # qu'elle a été coupée manuellement.
-        if (
-            heating_should_be_active
-            and key == CONF_HEATER_ENTITY
-            and entity_id.startswith("climate.")
-            and state.state == "off"
-        ):
-            _LOGGER.warning("[Sécurité] Vanne coupée manuellement : %s", entity_id)
-            problems.append(f"Vanne coupée manuellement : {entity_id}")
+        if key == CONF_HEATER_ENTITY:
+            manually_off = (
+                heating_should_be_active
+                and entity_id.startswith("climate.")
+                and state.state == "off"
+            )
+
+            if manually_off:
+                _warn_once(
+                    f"manual_off:{entity_id}",
+                    "[Sécurité] Vanne coupée manuellement : %s",
+                    entity_id,
+                )
+                problems.append(f"Vanne coupée manuellement : {entity_id}")
+            else:
+                _clear_reported(f"manual_off:{entity_id}")
 
     return problems
 
@@ -187,13 +234,17 @@ def compute_room_security(
     climate_state = hass.states.get(climate_entity) if climate_entity else None
 
     if climate_state is None or climate_state.state in ("unknown", "unavailable"):
-        _LOGGER.warning(
-            "[Sécurité] Thermostat introuvable ou indisponible : %s", climate_entity
+        _warn_once(
+            f"thermostat:{climate_entity}",
+            "[Sécurité] Thermostat introuvable ou indisponible : %s",
+            climate_entity,
         )
         return (
             SECURITY_STATE_CRITICAL,
             [f"Thermostat introuvable ou indisponible : {climate_entity}"],
         )
+
+    _clear_reported(f"thermostat:{climate_entity}")
 
     switch_state = hass.states.get("switch.chauffage_general")
     master_on = switch_state is not None and switch_state.state == "on"
