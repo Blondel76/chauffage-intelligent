@@ -14,6 +14,9 @@ from .const import (
     CONF_CLIMATE,
     CONF_COLD_OFFSET,
     CONF_HOT_OFFSET,
+    CONF_HUM_EXCESSIVE,
+    CONF_HUM_HIGH,
+    CONF_HUM_VERY_HIGH,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
     COEFFICIENT_MIN,
@@ -452,8 +455,61 @@ def _entite_disponible(hass: HomeAssistant, entity_id: str | None) -> bool:
     return state is not None and state.state not in ("unknown", "unavailable")
 
 
+HUMIDITY_LEVELS = ("Normal", "Élevée", "Très élevée", "Excessive")
+
+
+def _humidity_thresholds(config: dict) -> tuple[float, float, float]:
+    """Seuils (élevée, très élevée, excessive) de la pièce, avec repli sur les défauts.
+
+    Si les seuils réglés ne sont pas strictement croissants (config
+    corrompue), on revient aux valeurs par défaut.
+    """
+
+    high = _offset(config, CONF_HUM_HIGH, HUMIDITE_SEUIL_ELEVEE)
+    very_high = _offset(config, CONF_HUM_VERY_HIGH, HUMIDITE_SEUIL_TRES_ELEVEE)
+    excessive = _offset(config, CONF_HUM_EXCESSIVE, HUMIDITE_SEUIL_EXCESSIVE)
+
+    if not high < very_high < excessive:
+        return (
+            HUMIDITE_SEUIL_ELEVEE,
+            HUMIDITE_SEUIL_TRES_ELEVEE,
+            HUMIDITE_SEUIL_EXCESSIVE,
+        )
+
+    return high, very_high, excessive
+
+
+def _humidity_rank(humidity: float, config: dict) -> int:
+    """Rang du niveau d'humidité : 0 normal, 1 élevée, 2 très élevée, 3 excessive."""
+
+    high, very_high, excessive = _humidity_thresholds(config)
+
+    if humidity < high:
+        return 0
+
+    if humidity < very_high:
+        return 1
+
+    if humidity < excessive:
+        return 2
+
+    return 3
+
+
+# Différence d'humidité absolue (int - ext, g/m³) requise selon le niveau
+# d'humidité intérieure : (pour "recommandée", pour "possible").
+# Plus la pièce est humide, moins il faut que l'extérieur soit sec pour
+# conseiller d'aérer. Pièce à l'humidité normale : jamais "recommandée".
+_AERATION_REQUIRED = {
+    0: (math.inf, AERATION_SEUIL_RECOMMANDEE),
+    1: (AERATION_SEUIL_RECOMMANDEE, AERATION_SEUIL_POSSIBLE),
+    2: (AERATION_SEUIL_POSSIBLE, 0.0),
+    3: (0.0, -AERATION_SEUIL_POSSIBLE),
+}
+
+
 def calculate_aeration(hass: HomeAssistant, config: dict) -> str:
-    """Recommandation d'aération à partir de l'humidité absolue int/ext."""
+    """Recommandation d'aération : humidité absolue int/ext ET niveau d'humidité de la pièce."""
 
     temp_int = config.get(CONF_TEMP_INT)
     temp_ext = config.get(CONF_TEMP_EXT)
@@ -472,35 +528,27 @@ def calculate_aeration(hass: HomeAssistant, config: dict) -> str:
 
     difference = _humidite_absolue(ti, rhi) - _humidite_absolue(te, rhe)
 
-    if difference > AERATION_SEUIL_RECOMMANDEE:
+    # L'extérieur est plus humide : aérer aggraverait la situation.
+    if difference <= -AERATION_SEUIL_POSSIBLE:
+        return "Aération déconseillée"
+
+    seuil_recommandee, seuil_possible = _AERATION_REQUIRED[_humidity_rank(rhi, config)]
+
+    if difference > seuil_recommandee:
         return "Aération recommandée"
 
-    if difference > AERATION_SEUIL_POSSIBLE:
+    if difference > seuil_possible:
         return "Aération possible"
 
-    if difference > -AERATION_SEUIL_POSSIBLE:
-        return "Peu utile"
-
-    return "Aération déconseillée"
+    return "Peu utile"
 
 
 def calculate_humidity_level(hass: HomeAssistant, config: dict) -> str:
-    """Niveau qualitatif de l'humidité intérieure."""
+    """Niveau qualitatif de l'humidité intérieure (seuils réglables par pièce)."""
 
     hum_int = _humidite_associee(config.get(CONF_TEMP_INT))
 
     if not _entite_disponible(hass, hum_int):
         return "unknown"
 
-    h = get_float(hass, hum_int)
-
-    if h < HUMIDITE_SEUIL_ELEVEE:
-        return "Normal"
-
-    if h < HUMIDITE_SEUIL_TRES_ELEVEE:
-        return "Élevée"
-
-    if h < HUMIDITE_SEUIL_EXCESSIVE:
-        return "Très élevée"
-
-    return "Excessive"
+    return HUMIDITY_LEVELS[_humidity_rank(get_float(hass, hum_int), config)]
