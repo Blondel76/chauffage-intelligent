@@ -23,6 +23,9 @@ from .const import (
     CONF_HEATER_ENTITY,
     CONF_HEATING_TYPE,
     CONF_HOT_OFFSET,
+    CONF_HUM_EXCESSIVE,
+    CONF_HUM_HIGH,
+    CONF_HUM_VERY_HIGH,
     CONF_MODE_PLANNINGS,
     CONF_MODE_SELECTOR,
     CONF_NO_RISE_DELAY,
@@ -42,6 +45,9 @@ from .const import (
     ENTRY_TYPE_ROOM,
     HEATING_TYPE_ELECTRIC,
     HEATING_TYPE_GAS,
+    HUMIDITE_SEUIL_ELEVEE,
+    HUMIDITE_SEUIL_EXCESSIVE,
+    HUMIDITE_SEUIL_TRES_ELEVEE,
 )
 
 
@@ -107,11 +113,36 @@ def _plannings_schema(modes: list[str], existing: dict[str, str]) -> vol.Schema:
     return vol.Schema(schema_dict)
 
 
+def _humidity_selector() -> selector.NumberSelector:
+    """Champ numérique (%) pour un seuil d'humidité."""
+
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=30,
+            max=100,
+            step=1,
+            unit_of_measurement="%",
+            mode=selector.NumberSelectorMode.BOX,
+        )
+    )
+
+
+def _humidity_thresholds_valid(user_input: dict) -> bool:
+    """Les seuils d'humidité doivent être strictement croissants."""
+
+    return (
+        user_input[CONF_HUM_HIGH]
+        < user_input[CONF_HUM_VERY_HIGH]
+        < user_input[CONF_HUM_EXCESSIVE]
+    )
+
+
 def _threshold_fields(defaults: dict | None = None) -> dict:
     """Champs réglables d'une pièce, pré-remplis si besoin.
 
     - écart pièce froide / pièce chaude (°C)
     - suivi « la température ne monte pas » : délai (min) et gain minimal (°C)
+    - seuils d'humidité : élevée / très élevée / excessive (%)
     """
 
     defaults = defaults or {}
@@ -153,6 +184,18 @@ def _threshold_fields(defaults: dict | None = None) -> dict:
                 min=0.1, max=5, step=0.1, mode=selector.NumberSelectorMode.BOX
             )
         ),
+        vol.Required(
+            CONF_HUM_HIGH,
+            default=defaults.get(CONF_HUM_HIGH, HUMIDITE_SEUIL_ELEVEE),
+        ): _humidity_selector(),
+        vol.Required(
+            CONF_HUM_VERY_HIGH,
+            default=defaults.get(CONF_HUM_VERY_HIGH, HUMIDITE_SEUIL_TRES_ELEVEE),
+        ): _humidity_selector(),
+        vol.Required(
+            CONF_HUM_EXCESSIVE,
+            default=defaults.get(CONF_HUM_EXCESSIVE, HUMIDITE_SEUIL_EXCESSIVE),
+        ): _humidity_selector(),
     }
 
 
@@ -312,9 +355,14 @@ class ChauffageIntelligentConfigFlow(
     ):
         """Collect the room's base configuration."""
 
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            self._room_data = {**user_input, ENTRY_TYPE: ENTRY_TYPE_ROOM}
-            return await self.async_step_plannings()
+            if _humidity_thresholds_valid(user_input):
+                self._room_data = {**user_input, ENTRY_TYPE: ENTRY_TYPE_ROOM}
+                return await self.async_step_plannings()
+
+            errors["base"] = "humidity_thresholds_order"
 
         heating_type = _get_central_heating_type(self.hass)
         heater_domain = (
@@ -353,7 +401,7 @@ class ChauffageIntelligentConfigFlow(
             }
         )
 
-        return self.async_show_form(step_id="room", data_schema=schema)
+        return self.async_show_form(step_id="room", data_schema=schema, errors=errors)
 
     async def async_step_plannings(
         self,
@@ -452,15 +500,21 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Page 1/2 : écarts pièce froide / pièce chaude et suivi de montée en température."""
+        """Page 1/2 : écarts froid/chaud, suivi de montée en température, seuils d'humidité."""
+
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._pending_thresholds = user_input
-            return await self.async_step_room_plannings()
+            if _humidity_thresholds_valid(user_input):
+                self._pending_thresholds = user_input
+                return await self.async_step_room_plannings()
+
+            errors["base"] = "humidity_thresholds_order"
 
         return self.async_show_form(
             step_id="room_options",
             data_schema=vol.Schema(_threshold_fields(self.entry.data)),
+            errors=errors,
         )
 
     async def async_step_room_plannings(
