@@ -86,7 +86,11 @@ VALVE_CLOSED_TEMP = 7
 AERATION_SEUIL_RECOMMANDEE = 1.0
 AERATION_SEUIL_POSSIBLE = 0.3
 
-"""Seuils pour le niveau d'humidité intérieure (en %)"""
+"""Seuils pour le niveau d'humidité intérieure (en %), réglables par pièce.
+Les valeurs HUMIDITE_SEUIL_* sont les valeurs par défaut."""
+CONF_HUM_HIGH = "Seuil humidité élevée (%)"
+CONF_HUM_VERY_HIGH = "Seuil humidité très élevée (%)"
+CONF_HUM_EXCESSIVE = "Seuil humidité excessive (%)"
 HUMIDITE_SEUIL_ELEVEE = 60
 HUMIDITE_SEUIL_TRES_ELEVEE = 65
 HUMIDITE_SEUIL_EXCESSIVE = 70
