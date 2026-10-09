@@ -77,6 +77,17 @@ def _get_central_heating_type(hass: HomeAssistant) -> str:
     return HEATING_TYPE_GAS
 
 
+def _is_available(hass: HomeAssistant, entity_id: str | None) -> bool:
+    """True si l'entité existe et n'est ni unknown ni unavailable."""
+
+    if not entity_id:
+        return False
+
+    state = hass.states.get(entity_id)
+
+    return state is not None and state.state not in ("unknown", "unavailable")
+
+
 def _find_room_entry_by_area(hass: HomeAssistant, area_id: str) -> ConfigEntry | None:
     """Find a room's config entry by its raw area id."""
 
@@ -541,6 +552,7 @@ class ChauffageScheduler:
             hvac_mode == "heat"
             and self.heater_entity
             and self.heater_entity.startswith("climate.")
+            and _is_available(self.hass, self.heater_entity)
         ):
             await self.hass.services.async_call(
                 "climate",
@@ -561,6 +573,13 @@ class ChauffageScheduler:
         climate_state = self.hass.states.get(self.climate_entity)
 
         if climate_state is None:
+            return
+
+        # Vanne/interrupteur indisponible : aucune commande possible (HA
+        # loguerait « Referenced entities ... are missing or not currently
+        # available »). La sécurité de la pièce est déjà rouge dans ce cas.
+        if not _is_available(self.hass, self.heater_entity):
+            await update_boiler_state(self.hass)
             return
 
         hvac_action = climate_state.attributes.get("hvac_action")
