@@ -132,7 +132,16 @@ class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
             # le scheduler n'a aucun effet tant qu'elle reste en "off".
             heater_entity = room_entry.data.get(CONF_HEATER_ENTITY)
 
-            if heater_entity and heater_entity.startswith("climate."):
+            heater_state = (
+                self.hass.states.get(heater_entity) if heater_entity else None
+            )
+
+            if (
+                heater_entity
+                and heater_entity.startswith("climate.")
+                and heater_state is not None
+                and heater_state.state not in ("unknown", "unavailable")
+            ):
                 await self.hass.services.async_call(
                     "climate",
                     "set_hvac_mode",
