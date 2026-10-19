@@ -45,6 +45,13 @@ NO_RISE_ESTIMATE_FACTOR = 1.5
 FAULT_REASON_NO_RISE = "no_rise"
 FAULT_REASON_TOO_LONG = "too_long"
 
+"""Mode boost (optionnel, activable par pièce)"""
+CONF_BOOST_ENABLED = "Activer le mode boost"
+CONF_BOOST_PRESET = "Preset du mode boost"
+CONF_BOOST_DURATION = "Durée du mode boost (min)"
+DEFAULT_BOOST_PRESET = "comfort"
+DEFAULT_BOOST_DURATION = 30
+
 """Chaudière en chauffe alors qu'aucun thermostat ne demande de chauffe (alerte centrale)"""
 BOILER_NO_DEMAND_GRACE_MINUTES = 5
 
@@ -57,6 +64,9 @@ SIGNAL_CURRENT_PRESET = "chauffage_intelligent_current_preset_{}"
 
 """Signal interne : défaut verrouillé d'une pièce modifié (formaté avec l'entry_id)"""
 SIGNAL_ROOM_FAULT = "chauffage_intelligent_room_fault_{}"
+
+"""Signal interne : boost d'une pièce modifié (formaté avec l'entry_id)"""
+SIGNAL_ROOM_BOOST = "chauffage_intelligent_room_boost_{}"
 
 """Types d'entrées pour la config sécurité"""
 SECURITY_STATE_OFF = "gris"
