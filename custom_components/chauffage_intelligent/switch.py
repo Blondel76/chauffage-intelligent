@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_AREA,
+    CONF_BOOST_ENABLED,
     CONF_CLIMATE,
     CONF_DOOR_SENSOR,
     CONF_HEATER_ENTITY,
@@ -17,6 +23,7 @@ from .const import (
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
     ENTRY_TYPE_ROOM,
+    SIGNAL_ROOM_BOOST,
     slugify_area,
 )
 
@@ -33,24 +40,46 @@ def _is_window_open(hass: HomeAssistant, room_entry: ConfigEntry) -> bool:
     return state is not None and state.state == "on"
 
 
+def _remove_boost_entity(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Retire du registre l'entité boost d'une pièce où l'option est désactivée."""
+
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "switch", DOMAIN, f"{entry.entry_id}_boost"
+    )
+
+    if entity_id:
+        registry.async_remove(entity_id)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the master heating switch (central), or the window override switch (room)."""
+    """Set up the master heating switch (central), or the room switches (window override, boost)."""
 
     if entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_CENTRAL:
         async_add_entities([ChauffageGeneralSwitch(entry)])
         return
 
-    if entry.data.get(CONF_DOOR_SENSOR):
-        return
+    config = {**entry.data, **entry.options}
 
     area_name = entry.data[CONF_AREA]
     area_slug = slugify_area(area_name)
 
-    async_add_entities([WindowOverrideSwitch(entry, area_slug)])
+    entities: list[SwitchEntity] = []
+
+    if not entry.data.get(CONF_DOOR_SENSOR):
+        entities.append(WindowOverrideSwitch(entry, area_slug))
+
+    if config.get(CONF_BOOST_ENABLED, False):
+        entities.append(BoostSwitch(entry, area_slug))
+    else:
+        _remove_boost_entity(hass, entry)
+
+    if entities:
+        async_add_entities(entities)
 
 
 class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
@@ -194,3 +223,132 @@ class WindowOverrideSwitch(RestoreEntity, SwitchEntity):
 
         self._attr_is_on = False
         self.async_write_ha_state()
+
+
+class BoostSwitch(RestoreEntity, SwitchEntity):
+    """Mode boost d'une pièce (créé seulement si l'option est activée).
+
+    Allumer lance (ou relance) le boost, éteindre l'annule. L'état vient du
+    suivi RoomBoost (boost.py) ; le scheduler lit le même suivi pour
+    appliquer le preset du boost. Un boost en cours est restauré au
+    redémarrage de HA.
+    """
+
+    _attr_icon = "mdi:rocket-launch"
+    _attr_has_entity_name = True
+    _attr_name = "Boost"
+    _attr_should_poll = False
+
+    def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
+        """Initialize."""
+
+        self._entry = entry
+        self._area_slug = area_slug
+
+        self._attr_unique_id = f"{entry.entry_id}_boost"
+        self.entity_id = f"switch.boost_{area_slug}"
+        self._attr_suggested_object_id = f"boost_{area_slug}"
+
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, area_slug)},
+            "name": area_slug.replace("_", " ").title(),
+        }
+
+    def _data(self) -> dict:
+        """Données de la pièce dans hass.data."""
+
+        return self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+
+    def _boost(self):
+        """Suivi du boost de la pièce (créé par __init__ avant les plateformes)."""
+
+        return self._data().get("boost")
+
+    @property
+    def is_on(self) -> bool:
+        """True si le boost est en cours."""
+
+        boost = self._boost()
+
+        return boost is not None and boost.active
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Preset, durée, heure de fin et minutes restantes (pour la carte)."""
+
+        boost = self._boost()
+
+        if boost is None:
+            return {}
+
+        attributes: dict[str, Any] = {
+            "preset": boost.preset,
+            "duree": boost.duration,
+        }
+
+        if boost.active:
+            end = boost.end
+
+            attributes["fin"] = end.isoformat() if end else None
+            attributes["minutes_restantes"] = boost.remaining_minutes
+
+        return attributes
+
+    async def async_added_to_hass(self) -> None:
+        """Restore a running boost and follow the boost tracker."""
+
+        await super().async_added_to_hass()
+
+        boost = self._boost()
+        last_state = await self.async_get_last_state()
+
+        if boost is not None and last_state is not None and last_state.state == "on":
+            raw_end = last_state.attributes.get("fin")
+            end = dt_util.parse_datetime(raw_end) if raw_end else None
+
+            if end is not None:
+                boost.restore(end)
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_ROOM_BOOST.format(self._entry.entry_id),
+                self._handle_boost_change,
+            )
+        )
+
+    @callback
+    def _handle_boost_change(self) -> None:
+        """Le boost a démarré, expiré, été annulé ou rafraîchi."""
+
+        self.async_write_ha_state()
+
+    async def _reconcile(self) -> None:
+        """Applique tout de suite le preset attendu (boost ou planning)."""
+
+        scheduler = self._data().get("scheduler")
+
+        if scheduler is not None:
+            await scheduler.async_reconcile()
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Lance (ou relance) le boost."""
+
+        boost = self._boost()
+
+        if boost is None:
+            return
+
+        boost.start()
+        await self._reconcile()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Annule le boost et revient au planning."""
+
+        boost = self._boost()
+
+        if boost is None:
+            return
+
+        boost.cancel()
+        await self._reconcile()
