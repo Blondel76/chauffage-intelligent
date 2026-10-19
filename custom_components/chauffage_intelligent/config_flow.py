@@ -14,6 +14,9 @@ from .const import (
     CENTRAL_UNIQUE_ID,
     CONF_AREA,
     CONF_BOILER_ENTITY,
+    CONF_BOOST_DURATION,
+    CONF_BOOST_ENABLED,
+    CONF_BOOST_PRESET,
     CONF_CLIMATE,
     CONF_COLD_OFFSET,
     CONF_DOOR_SENSOR,
@@ -32,6 +35,8 @@ from .const import (
     CONF_NO_RISE_DELTA,
     CONF_TEMP_EXT,
     CONF_TEMP_INT,
+    DEFAULT_BOOST_DURATION,
+    DEFAULT_BOOST_PRESET,
     DEFAULT_COLD_OFFSET,
     DEFAULT_GROUP_THRESHOLD,
     DEFAULT_HOT_OFFSET,
@@ -143,6 +148,8 @@ def _threshold_fields(defaults: dict | None = None) -> dict:
     - écart pièce froide / pièce chaude (°C)
     - suivi « la température ne monte pas » : délai (min) et gain minimal (°C)
     - seuils d'humidité : élevée / très élevée / excessive (%)
+    - activation du mode boost (les réglages du boost sont sur une page à part,
+      affichée seulement si le boost est activé)
     """
 
     defaults = defaults or {}
@@ -196,7 +203,38 @@ def _threshold_fields(defaults: dict | None = None) -> dict:
             CONF_HUM_EXCESSIVE,
             default=defaults.get(CONF_HUM_EXCESSIVE, HUMIDITE_SEUIL_EXCESSIVE),
         ): _humidity_selector(),
+        vol.Required(
+            CONF_BOOST_ENABLED,
+            default=defaults.get(CONF_BOOST_ENABLED, False),
+        ): selector.BooleanSelector(),
     }
+
+
+def _boost_schema(defaults: dict | None = None) -> vol.Schema:
+    """Réglages du mode boost : preset (texte libre) et durée (min)."""
+
+    defaults = defaults or {}
+
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_BOOST_PRESET,
+                default=defaults.get(CONF_BOOST_PRESET, DEFAULT_BOOST_PRESET),
+            ): selector.TextSelector(),
+            vol.Required(
+                CONF_BOOST_DURATION,
+                default=defaults.get(CONF_BOOST_DURATION, DEFAULT_BOOST_DURATION),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=5,
+                    max=240,
+                    step=1,
+                    unit_of_measurement="min",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            ),
+        }
+    )
 
 
 def _central_schema(defaults: dict | None = None) -> vol.Schema:
@@ -360,6 +398,10 @@ class ChauffageIntelligentConfigFlow(
         if user_input is not None:
             if _humidity_thresholds_valid(user_input):
                 self._room_data = {**user_input, ENTRY_TYPE: ENTRY_TYPE_ROOM}
+
+                if user_input.get(CONF_BOOST_ENABLED):
+                    return await self.async_step_boost()
+
                 return await self.async_step_plannings()
 
             errors["base"] = "humidity_thresholds_order"
@@ -402,6 +444,18 @@ class ChauffageIntelligentConfigFlow(
         )
 
         return self.async_show_form(step_id="room", data_schema=schema, errors=errors)
+
+    async def async_step_boost(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ):
+        """Réglages du mode boost (uniquement si l'option est cochée)."""
+
+        if user_input is not None:
+            self._room_data.update(user_input)
+            return await self.async_step_plannings()
+
+        return self.async_show_form(step_id="boost", data_schema=_boost_schema())
 
     async def async_step_plannings(
         self,
@@ -500,13 +554,17 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Page 1/2 : écarts froid/chaud, suivi de montée en température, seuils d'humidité."""
+        """Page 1 : écarts froid/chaud, suivi de montée, seuils d'humidité, activation du boost."""
 
         errors: dict[str, str] = {}
 
         if user_input is not None:
             if _humidity_thresholds_valid(user_input):
                 self._pending_thresholds = user_input
+
+                if user_input.get(CONF_BOOST_ENABLED):
+                    return await self.async_step_room_boost()
+
                 return await self.async_step_room_plannings()
 
             errors["base"] = "humidity_thresholds_order"
@@ -517,11 +575,26 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
         )
 
+    async def async_step_room_boost(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ):
+        """Page 2 (si boost activé) : preset et durée du boost."""
+
+        if user_input is not None:
+            self._pending_thresholds = {**self._pending_thresholds, **user_input}
+            return await self.async_step_room_plannings()
+
+        return self.async_show_form(
+            step_id="room_boost",
+            data_schema=_boost_schema(self.entry.data),
+        )
+
     async def async_step_room_plannings(
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Page 2/2 : plannings (un champ par mode), puis sauvegarde de tout."""
+        """Dernière page : plannings (un champ par mode), puis sauvegarde de tout."""
 
         modes = _get_central_modes(self.hass)
         existing = self.entry.data.get(CONF_MODE_PLANNINGS, {})
