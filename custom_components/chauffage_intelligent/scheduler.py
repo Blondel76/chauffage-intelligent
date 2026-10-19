@@ -3,7 +3,9 @@
 Principe : à chaque réévaluation (chaque minute + à chaque événement utile),
 le scheduler calcule le preset que la pièce DOIT avoir maintenant, le publie
 dans l'entité `sensor.chauffage_actuel_<pièce>`, puis aligne le thermostat
-dessus s'il diffère. Le planning a toujours la main.
+dessus s'il diffère. Le planning a toujours la main, sauf pendant un boost :
+le preset du boost prend alors le dessus, sans tenir compte du sélecteur de
+mode, jusqu'à la fin du boost.
 """
 
 from __future__ import annotations
@@ -363,7 +365,7 @@ class ChauffageScheduler:
 
         return previous, False
 
-    def _publish(self, slot: str, anticipating: bool) -> None:
+    def _publish(self, slot: str, anticipating: bool, boost: bool = False) -> None:
         """Met à jour l'entité 'chauffage actuel' de la pièce."""
 
         target = self._anticipated_target
@@ -377,7 +379,12 @@ class ChauffageScheduler:
             self.hass,
             SIGNAL_CURRENT_PRESET.format(self.entry.entry_id),
             _preset_of(slot),
-            {"creneau": slot, "anticipation": anticipating, "cible": cible},
+            {
+                "creneau": slot,
+                "anticipation": anticipating,
+                "cible": cible,
+                "boost": boost,
+            },
         )
 
     async def _align_thermostat(self, preset: str) -> None:
@@ -416,9 +423,21 @@ class ChauffageScheduler:
         self._failed_preset = None
 
     async def async_reconcile(self) -> None:
-        """Calcule le preset attendu, met à jour l'entité et aligne le thermostat."""
+        """Calcule le preset attendu, met à jour l'entité et aligne le thermostat.
+
+        Un boost en cours passe avant le planning et le sélecteur de mode.
+        """
 
         async with self._lock:
+            boost = self._get_boost()
+
+            if boost is not None and boost.active:
+                preset = boost.preset
+
+                self._publish(f"boost|{preset}", False, boost=True)
+                await self._align_thermostat(preset)
+                return
+
             planning = self._get_planning()
 
             if not planning:
@@ -445,6 +464,13 @@ class ChauffageScheduler:
 
         return data.get("monitor")
 
+    def _get_boost(self):
+        """Return this room's boost tracker (mode boost)."""
+
+        data = self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {})
+
+        return data.get("boost")
+
     async def async_refresh(self) -> None:
         """Réévalue l'entité de chauffe puis le planning (utilisé aussi au réarmement)."""
 
@@ -452,14 +478,22 @@ class ChauffageScheduler:
         await self.async_reconcile()
 
     async def _handle_minute_tick(self, _now) -> None:
-        """Chaque minute : suivi de montée, entité de chauffe et planning.
+        """Chaque minute : expiration du boost, suivi de montée, entité de chauffe et planning.
 
-        Le suivi de montée en température passe en premier : un défaut
+        L'expiration du boost passe en premier : la réévaluation qui suit
+        revient alors au planning dans le même passage.
+
+        Le suivi de montée en température passe ensuite : un défaut
         déclaré bloque la vanne dans le même passage (sécurité rouge).
         Réévaluer l'entité de chauffe chaque minute permet aussi de détecter
         les emprunts de chaleur entre pièces d'un groupe sans écouter chaque
         thermostat lié.
         """
+
+        boost = self._get_boost()
+
+        if boost is not None:
+            boost.evaluate()
 
         monitor = self._get_monitor()
 
