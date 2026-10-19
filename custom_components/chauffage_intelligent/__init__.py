@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .boost import RoomBoost
 from .const import (
     CONF_MODE_SELECTOR,
     DOMAIN,
@@ -38,11 +39,21 @@ def _get_central_mode_selector(hass: HomeAssistant) -> str | None:
 
 
 async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Réapplique le créneau en cours quand le planning d'une pièce est modifié."""
+    """Réapplique le créneau en cours quand le planning d'une pièce est modifié.
+
+    Si l'option « mode boost » a été activée ou désactivée, la pièce est
+    rechargée : l'entité boost est alors créée ou retirée du registre.
+    """
 
     data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
 
     if not data:
+        return
+
+    boost = data.get("boost")
+
+    if boost is not None and boost.enabled != boost.enabled_at_setup:
+        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
         return
 
     scheduler = data.get("scheduler")
@@ -97,11 +108,13 @@ async def async_setup_entry(
     mode_selector = _get_central_mode_selector(hass)
     resolver = PlanningResolver(hass, entry, mode_selector)
 
-    # Le suivi de montée en température doit exister AVANT les plateformes :
-    # l'entité « Défaut chauffe » y restaure un défaut non réarmé, et le
-    # capteur de sécurité le consulte.
+    # Le suivi de montée en température et le boost doivent exister AVANT
+    # les plateformes : l'entité « Défaut chauffe » restaure un défaut non
+    # réarmé dans le suivi, l'entité « Boost » restaure un boost en cours,
+    # et le capteur de sécurité consulte le suivi.
     monitor = RoomHeatingMonitor(hass, entry)
-    hass.data[DOMAIN][entry.entry_id] = {"monitor": monitor}
+    boost = RoomBoost(hass, entry)
+    hass.data[DOMAIN][entry.entry_id] = {"monitor": monitor, "boost": boost}
 
     await hass.config_entries.async_forward_entry_setups(
         entry, ROOM_PLATFORMS
@@ -115,6 +128,7 @@ async def async_setup_entry(
         "resolver": resolver,
         "scheduler": scheduler,
         "monitor": monitor,
+        "boost": boost,
     }
 
     scheduler.start()
