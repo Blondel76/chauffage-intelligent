@@ -55,6 +55,12 @@ DEFAULT_BOOST_DURATION = 30
 """Chaudière en chauffe alors qu'aucun thermostat ne demande de chauffe (alerte centrale)"""
 BOILER_NO_DEMAND_GRACE_MINUTES = 5
 
+"""Config centrale (optionnel) : capteur extérieur (mini/maxi réels du jour) et entité météo (mini/maxi prévus)"""
+CONF_TEMP_EXT_CENTRAL = "Capteur de température extérieure du jour (optionnel)"
+CONF_WEATHER_ENTITY = "Entité météo pour les prévisions (optionnel)"
+FORECAST_REFRESH_MINUTES = 30
+FORECAST_RETRY_MINUTES = 5
+
 """Types d'entrées pour les planning"""
 CONF_MODE_PLANNINGS = "mode_plannings"
 DEFAULT_PLANNING = "12:00|eco"
