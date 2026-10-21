@@ -86,6 +86,7 @@ class RoomHeatingMonitor:
 
         self._fault_reason: str | None = None
         self._fault_since: datetime | None = None
+        self._fault_details: str | None = None
 
         self._reset_tracking()
 
@@ -122,11 +123,23 @@ class RoomHeatingMonitor:
 
         return self._fault_since
 
-    def restore_fault(self, reason: str | None, since: datetime | None = None) -> None:
+    @property
+    def fault_details(self) -> str | None:
+        """Détail chiffré du défaut verrouillé (gain, durée...), ou None."""
+
+        return self._fault_details
+
+    def restore_fault(
+        self,
+        reason: str | None,
+        since: datetime | None = None,
+        details: str | None = None,
+    ) -> None:
         """Rétablit un défaut mémorisé avant un redémarrage (sans le re-déclarer)."""
 
         self._fault_reason = reason or FAULT_REASON_NO_RISE
         self._fault_since = since or dt_util.utcnow()
+        self._fault_details = details
         self._reset_tracking()
         self._notify()
 
@@ -135,8 +148,27 @@ class RoomHeatingMonitor:
 
         self._fault_reason = None
         self._fault_since = None
+        self._fault_details = None
         self._reset_tracking()
         self._notify()
+
+    def _log_to_logbook(self, message: str) -> None:
+        """Ajoute une entrée dans le journal HA, rattachée à l'entité « Défaut chauffe »."""
+
+        if not self.hass.services.has_service("logbook", "log"):
+            return
+
+        self.hass.async_create_task(
+            self.hass.services.async_call(
+                "logbook",
+                "log",
+                {
+                    "name": self.entry.title,
+                    "message": message,
+                    "entity_id": f"binary_sensor.defaut_chauffe_{self._area_slug}",
+                },
+            )
+        )
 
     def _declare_fault(self, reason: str, details: str) -> None:
         """Verrouille le défaut."""
@@ -147,8 +179,10 @@ class RoomHeatingMonitor:
 
         self._fault_reason = reason
         self._fault_since = dt_util.utcnow()
+        self._fault_details = details
         self._reset_tracking()
         self._notify()
+        self._log_to_logbook(f"{FAULT_LABELS[reason]} : {details}")
 
     def _notify(self) -> None:
         """Prévient les entités de la pièce (capteur de sécurité, défaut)."""
