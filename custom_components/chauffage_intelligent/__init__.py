@@ -7,12 +7,17 @@ from homeassistant.core import HomeAssistant
 
 from .boost import RoomBoost
 from .const import (
+    CONF_BOILER_ENTITY,
+    CONF_HEATING_TYPE,
     CONF_MODE_SELECTOR,
+    CONF_TEMP_EXT_CENTRAL,
+    CONF_WEATHER_ENTITY,
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
     ENTRY_TYPE_GROUP,
     ENTRY_TYPE_ROOM,
+    HEATING_TYPE_GAS,
 )
 from .heating_monitor import RoomHeatingMonitor
 from .resolver import PlanningResolver
@@ -62,13 +67,36 @@ async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await scheduler.async_reconcile()
 
 
+def _central_signature(entry: ConfigEntry) -> tuple:
+    """Réglages centraux qui décident des entités créées (capteurs optionnels)."""
+
+    config = {**entry.data, **entry.options}
+
+    return (
+        config.get(CONF_HEATING_TYPE, HEATING_TYPE_GAS),
+        config.get(CONF_BOILER_ENTITY),
+        config.get(CONF_TEMP_EXT_CENTRAL),
+        config.get(CONF_WEATHER_ENTITY),
+    )
+
+
 async def _async_central_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """La config centrale a changé : recharger les pièces.
 
     Le resolver et le scheduler de chaque pièce mémorisent l'entité
     sélecteur de mode à leur création ; un rechargement leur fait relire
     la nouvelle valeur.
+
+    Si le type de chauffage, la chaudière, le capteur extérieur ou l'entité
+    météo ont changé, l'entrée centrale est aussi rechargée : les capteurs
+    optionnels (heures de la chaudière, températures du jour) sont alors
+    créés ou retirés.
     """
+
+    data = hass.data.get(DOMAIN, {}).get(entry.entry_id) or {}
+
+    if data.get("signature") != _central_signature(entry):
+        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
 
     for room_entry in hass.config_entries.async_entries(DOMAIN):
         if room_entry.data.get(ENTRY_TYPE) == ENTRY_TYPE_ROOM:
@@ -97,7 +125,7 @@ async def async_setup_entry(
         await hass.config_entries.async_forward_entry_setups(
             entry, CENTRAL_PLATFORMS
         )
-        hass.data[DOMAIN][entry.entry_id] = {}
+        hass.data[DOMAIN][entry.entry_id] = {"signature": _central_signature(entry)}
 
         # Modification de la config centrale (ex. sélecteur de mode)
         # -> les pièces doivent être rechargées.
