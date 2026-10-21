@@ -90,6 +90,15 @@ def _is_available(hass: HomeAssistant, entity_id: str | None) -> bool:
     return state is not None and state.state not in ("unknown", "unavailable")
 
 
+def _same_temperature(current, wanted: float) -> bool:
+    """True si la consigne actuelle d'une vanne vaut déjà la consigne voulue."""
+
+    try:
+        return abs(float(current) - float(wanted)) < 0.05
+    except (TypeError, ValueError):
+        return False
+
+
 def _find_room_entry_by_area(hass: HomeAssistant, area_id: str) -> ConfigEntry | None:
     """Find a room's config entry by its raw area id."""
 
@@ -644,20 +653,32 @@ class ChauffageScheduler:
         if compute_room_security_state(self.hass, self.entry) == SECURITY_STATE_CRITICAL:
             should_activate = False
 
+        # La commande n'est envoyée que si l'état réel de la vanne/de
+        # l'interrupteur diffère de l'état voulu : réévaluée chaque minute,
+        # elle ne doit pas renvoyer la même commande pour rien. Si une
+        # commande n'a pas été prise en compte, l'écart persiste et elle
+        # est renvoyée à la passe suivante.
+        heater_state = self.hass.states.get(self.heater_entity)
+
         if _get_central_heating_type(self.hass) == HEATING_TYPE_ELECTRIC:
-            await self.hass.services.async_call(
-                "switch",
-                "turn_on" if should_activate else "turn_off",
-                {"entity_id": self.heater_entity},
-            )
+            wanted_state = "on" if should_activate else "off"
+
+            if heater_state is None or heater_state.state != wanted_state:
+                await self.hass.services.async_call(
+                    "switch",
+                    "turn_on" if should_activate else "turn_off",
+                    {"entity_id": self.heater_entity},
+                )
         else:
-            await self.hass.services.async_call(
-                "climate",
-                "set_temperature",
-                {
-                    "entity_id": self.heater_entity,
-                    "temperature": VALVE_OPEN_TEMP if should_activate else VALVE_CLOSED_TEMP,
-                },
-            )
+            wanted_temp = VALVE_OPEN_TEMP if should_activate else VALVE_CLOSED_TEMP
+
+            if heater_state is None or not _same_temperature(
+                heater_state.attributes.get("temperature"), wanted_temp
+            ):
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_temperature",
+                    {"entity_id": self.heater_entity, "temperature": wanted_temp},
+                )
 
         await update_boiler_state(self.hass)
