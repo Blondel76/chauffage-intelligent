@@ -7,8 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_AREA, DOMAIN, SECURITY_STATE_CRITICAL, slugify_area
-from .security import compute_room_security
+from .const import CONF_AREA, DOMAIN, slugify_area
 
 
 async def async_setup_entry(
@@ -26,10 +25,11 @@ async def async_setup_entry(
 class RearmButton(ButtonEntity):
     """Réarme la sécurité d'une pièce après un défaut « la température ne monte pas ».
 
-    Le réarmement lève le verrou, repart d'un suivi vierge, puis refait le
-    contrôle complet de la pièce (thermostat, capteurs, vanne, porte,
-    chaudière). Si une autre cause de panne subsiste, la pièce reste rouge
-    et une notification en donne la liste.
+    Le réarmement lève le verrou et repart d'un suivi vierge, puis le
+    scheduler réévalue la pièce. Le contrôle complet (thermostat, capteurs,
+    vanne, porte, chaudière) est recalculé en continu par le capteur de
+    sécurité : si une autre cause de panne subsiste, la pièce reste rouge
+    et l'attribut « raisons » en donne la liste.
     """
 
     _attr_has_entity_name = True
@@ -52,7 +52,7 @@ class RearmButton(ButtonEntity):
         }
 
     async def async_press(self) -> None:
-        """Lève le verrou puis refait le contrôle complet de la pièce."""
+        """Lève le verrou puis réévalue la pièce."""
 
         data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
 
@@ -60,32 +60,6 @@ class RearmButton(ButtonEntity):
 
         if monitor is not None:
             monitor.rearm()
-
-        state, reasons = compute_room_security(self.hass, self._entry)
-
-        notification_id = f"chauffage_intelligent_rearm_{self._area_slug}"
-
-        if state == SECURITY_STATE_CRITICAL:
-            message = "\n".join(f"- {reason}" for reason in reasons)
-
-            await self.hass.services.async_call(
-                "persistent_notification",
-                "create",
-                {
-                    "title": f"Réarmement impossible : {self._entry.title}",
-                    "message": (
-                        "La pièce reste en rouge, des problèmes subsistent :\n"
-                        f"{message}"
-                    ),
-                    "notification_id": notification_id,
-                },
-            )
-        else:
-            await self.hass.services.async_call(
-                "persistent_notification",
-                "dismiss",
-                {"notification_id": notification_id},
-            )
 
         scheduler = data.get("scheduler")
 
