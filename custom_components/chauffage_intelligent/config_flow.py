@@ -34,7 +34,9 @@ from .const import (
     CONF_NO_RISE_DELAY,
     CONF_NO_RISE_DELTA,
     CONF_TEMP_EXT,
+    CONF_TEMP_EXT_CENTRAL,
     CONF_TEMP_INT,
+    CONF_WEATHER_ENTITY,
     DEFAULT_BOOST_DURATION,
     DEFAULT_BOOST_PRESET,
     DEFAULT_COLD_OFFSET,
@@ -263,6 +265,20 @@ def _central_schema(defaults: dict | None = None) -> vol.Schema:
                 CONF_BOILER_ENTITY, default=defaults.get(CONF_BOILER_ENTITY)
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain=["switch", "climate"])
+            ),
+            vol.Optional(
+                CONF_TEMP_EXT_CENTRAL,
+                description={"suggested_value": defaults.get(CONF_TEMP_EXT_CENTRAL)},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["sensor"], device_class=["temperature"]
+                )
+            ),
+            vol.Optional(
+                CONF_WEATHER_ENTITY,
+                description={"suggested_value": defaults.get(CONF_WEATHER_ENTITY)},
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["weather"])
             ),
         }
     )
@@ -520,10 +536,17 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ):
-        """Edit the central mode selector, heating type, and boiler entity."""
+        """Edit the central mode selector, heating type, boiler, outdoor sensor and weather entity."""
 
         if user_input is not None:
             new_data = {**self.entry.data, **user_input}
+
+            # Champ vidé dans l'interface : la clé est absente de user_input,
+            # il faut donc la retirer explicitement de la config.
+            for key in (CONF_TEMP_EXT_CENTRAL, CONF_WEATHER_ENTITY):
+                if key not in user_input:
+                    new_data.pop(key, None)
+
             self.hass.config_entries.async_update_entry(self.entry, data=new_data)
             return self.async_create_entry(title="", data={})
 
