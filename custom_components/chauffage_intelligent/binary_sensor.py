@@ -239,7 +239,11 @@ class DefautChauffeBinarySensor(RestoreEntity, BinarySensorEntity):
             if raw_since:
                 since = dt_util.parse_datetime(raw_since)
 
-            monitor.restore_fault(last_state.attributes.get("raison"), since)
+            monitor.restore_fault(
+                last_state.attributes.get("raison"),
+                since,
+                last_state.attributes.get("details"),
+            )
 
         self.async_on_remove(
             async_dispatcher_connect(
@@ -267,6 +271,7 @@ class DefautChauffeBinarySensor(RestoreEntity, BinarySensorEntity):
         self._attr_extra_state_attributes = {
             "raison": monitor.fault_reason,
             "description": monitor.fault_label,
+            "details": monitor.fault_details,
             "depuis": since.isoformat() if since else None,
         }
 
