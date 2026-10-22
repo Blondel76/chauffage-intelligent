@@ -13,7 +13,8 @@ pièce (bouton), dans l'un des deux cas :
 - "no_rise"  : le délai réglé est écoulé et le gain de température est
   inférieur au gain minimal réglé ;
 - "too_long" : la chauffe dure plus de NO_RISE_ESTIMATE_FACTOR fois le temps
-  de chauffe estimé au départ.
+  de chauffe estimé au départ, plus une marge fixe de
+  NO_RISE_ESTIMATE_MARGIN_MINUTES minutes (retard de la vanne et du capteur).
 
 Le suivi (chrono, température de départ) n'est conservé qu'en mémoire : un
 redémarrage de HA le remet à zéro. Le verrou, lui, est restauré par l'entité
@@ -51,6 +52,7 @@ from .const import (
     FAULT_REASON_NO_RISE,
     FAULT_REASON_TOO_LONG,
     NO_RISE_ESTIMATE_FACTOR,
+    NO_RISE_ESTIMATE_MARGIN_MINUTES,
     SIGNAL_ROOM_FAULT,
     slugify_area,
 )
@@ -297,7 +299,11 @@ class RoomHeatingMonitor:
 
         # 2. Chauffe plus longue que le temps de chauffe estimé au départ.
         if self._estimate_minutes > 0:
-            limit = max(delay, NO_RISE_ESTIMATE_FACTOR * self._estimate_minutes)
+            limit = max(
+                delay,
+                NO_RISE_ESTIMATE_FACTOR * self._estimate_minutes
+                + NO_RISE_ESTIMATE_MARGIN_MINUTES,
+            )
 
             if elapsed > limit:
                 self._declare_fault(
