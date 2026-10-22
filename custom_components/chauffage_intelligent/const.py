@@ -40,8 +40,11 @@ CONF_NO_RISE_DELAY = "Délai sans montée de température (min)"
 CONF_NO_RISE_DELTA = "Gain minimal de température (°C)"
 DEFAULT_NO_RISE_DELAY = 10
 DEFAULT_NO_RISE_DELTA = 0.2
-"""Défaut aussi déclaré si la chauffe dure plus de ce multiple du temps de chauffe estimé"""
+"""Défaut aussi déclaré si la chauffe dure plus de (multiple x temps de chauffe estimé) + marge.
+La marge fixe évite les faux défauts sur les petits écarts de température, où
+l'estimation est très courte alors que la vanne et le capteur ont un retard fixe."""
 NO_RISE_ESTIMATE_FACTOR = 1.5
+NO_RISE_ESTIMATE_MARGIN_MINUTES = 10
 FAULT_REASON_NO_RISE = "no_rise"
 FAULT_REASON_TOO_LONG = "too_long"
 
