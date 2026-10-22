@@ -1,18 +1,21 @@
 """Suivi « la température ne monte pas » pour Chauffage Intelligent.
 
-Une pièce est « en chauffe réelle » quand son thermostat demande de la
-chaleur, que sa vanne/son interrupteur est ouvert et que la chaudière (si
-elle est configurée) est en chauffe. Dès que ces trois conditions sont
-réunies, on relève l'heure, la température et le temps de chauffe estimé.
-Si la condition cesse (demande terminée, vanne fermée, fenêtre ouverte,
-consigne modifiée...), le suivi repart de zéro.
+Une pièce est « en chauffe réelle » quand sa vanne/son interrupteur est
+ouvert et qu'elle chauffe effectivement (cf. is_room_really_heating : en
+gaz, vanne ouverte + chaudière en chauffe, y compris quand la pièce
+profite de la chaleur d'un groupe ; en électrique, thermostat en chauffe).
+Dès que la condition est réunie, on relève l'heure, la température et le
+temps de chauffe estimé. Si elle cesse (vanne fermée, fenêtre ouverte,
+consigne modifiée, thermostat qui reprend ou arrête la demande...), le suivi
+repart de zéro.
 
 Un défaut est déclaré, puis VERROUILLÉ jusqu'au réarmement manuel de la
 pièce (bouton), dans l'un des deux cas :
 
 - "no_rise"  : le délai réglé est écoulé et le gain de température est
   inférieur au gain minimal réglé ;
-- "too_long" : la chauffe dure plus de NO_RISE_ESTIMATE_FACTOR fois le temps
+- "too_long" : (seulement si le thermostat demande de la chaleur) la chauffe
+  dure plus de NO_RISE_ESTIMATE_FACTOR fois le temps
   de chauffe estimé au départ, plus une marge fixe de
   NO_RISE_ESTIMATE_MARGIN_MINUTES minutes (retard de la vanne et du capteur).
 
@@ -35,9 +38,8 @@ from .calculations import (
     _numeric_state,
     _room_target,
     calculate_heating_time,
-    get_central_boiler_entity,
-    is_boiler_heating,
     is_heater_open,
+    is_room_really_heating,
 )
 from .const import (
     COEFFICIENT_DEFAULT,
@@ -203,6 +205,7 @@ class RoomHeatingMonitor:
         self._reference_time: datetime | None = None
         self._reference_temp: float | None = None
         self._reference_target: float | None = None
+        self._reference_requested: bool = False
         self._estimate_minutes: int = 0
         self._rise_confirmed: bool = False
 
@@ -212,22 +215,20 @@ class RoomHeatingMonitor:
         return {**self.entry.data, **self.entry.options}
 
     def _is_really_heating(self, config: dict) -> bool:
-        """Thermostat en demande, vanne ouverte et chaudière en chauffe."""
+        """La pièce chauffe réellement et sa vanne/son interrupteur est ouvert."""
+
+        if not is_room_really_heating(self.hass, config):
+            return False
+
+        # Électrique : le thermostat ne suffit pas, l'interrupteur doit être allumé.
+        return is_heater_open(self.hass, config.get(CONF_HEATER_ENTITY))
+
+    def _thermostat_requests_heat(self, config: dict) -> bool:
+        """Le thermostat de la pièce demande lui-même de la chaleur."""
 
         climate = self.hass.states.get(config.get(CONF_CLIMATE))
 
-        if climate is None or climate.attributes.get("hvac_action") != "heating":
-            return False
-
-        if not is_heater_open(self.hass, config.get(CONF_HEATER_ENTITY)):
-            return False
-
-        boiler_entity = get_central_boiler_entity(self.hass)
-
-        if boiler_entity and not is_boiler_heating(self.hass, boiler_entity):
-            return False
-
-        return True
+        return climate is not None and climate.attributes.get("hvac_action") == "heating"
 
     def _read_coefficient(self) -> float:
         """Lit le coefficient de chauffe de la pièce."""
@@ -263,9 +264,15 @@ class RoomHeatingMonitor:
             self._reset_tracking()
             return
 
-        # La consigne a changé (nouveau créneau du planning...) : le temps
+        requested = self._thermostat_requests_heat(config)
+
+        # La consigne a changé (nouveau créneau du planning...) ou le
+        # thermostat a commencé/cessé de demander de la chaleur : le temps
         # de chauffe estimé n'est plus valable, on repart de zéro.
-        if self._reference_time is not None and target != self._reference_target:
+        if self._reference_time is not None and (
+            target != self._reference_target
+            or requested != self._reference_requested
+        ):
             self._reset_tracking()
 
         now = dt_util.utcnow()
@@ -274,6 +281,7 @@ class RoomHeatingMonitor:
             self._reference_time = now
             self._reference_temp = temp
             self._reference_target = target
+            self._reference_requested = requested
             self._estimate_minutes = calculate_heating_time(
                 self.hass, config, self._read_coefficient()
             )
@@ -298,7 +306,9 @@ class RoomHeatingMonitor:
             return
 
         # 2. Chauffe plus longue que le temps de chauffe estimé au départ.
-        if self._estimate_minutes > 0:
+        # Pas applicable à une pièce qui profite de la chaleur d'un groupe
+        # sans que son thermostat la demande : l'estimation n'a alors aucun sens.
+        if requested and self._estimate_minutes > 0:
             limit = max(
                 delay,
                 NO_RISE_ESTIMATE_FACTOR * self._estimate_minutes
