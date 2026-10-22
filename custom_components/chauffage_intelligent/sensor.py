@@ -41,11 +41,13 @@ from .calculations import (
     is_boiler_heating,
     is_room_cold,
     is_room_hot,
+    is_room_really_heating,
 )
 from .const import (
     CONF_AREA,
     CONF_BOILER_ENTITY,
     CONF_CLIMATE,
+    CONF_HEATER_ENTITY,
     CONF_HEATING_TYPE,
     CONF_TEMP_EXT,
     CONF_TEMP_EXT_CENTRAL,
@@ -172,17 +174,16 @@ class _CentralCountSensor(SensorEntity):
 
 
 class PiecesEnChauffeSensor(_CentralCountSensor):
-    """Pièces dont le thermostat est en chauffe."""
+    """Pièces qui chauffent réellement (thermostat en électrique, vanne ouverte + chaudière en gaz)."""
 
     _key = "pieces_en_chauffe"
     _label = "Pièces en chauffe"
     _attr_icon = "mdi:radiator"
 
     def _matches(self, room_entry: ConfigEntry) -> bool:
-        config = {**room_entry.data, **room_entry.options}
-        state = self.hass.states.get(config.get(CONF_CLIMATE))
-
-        return state is not None and state.attributes.get("hvac_action") == "heating"
+        return is_room_really_heating(
+            self.hass, {**room_entry.data, **room_entry.options}
+        )
 
 
 class PiecesFroidesSensor(_CentralCountSensor):
@@ -243,7 +244,7 @@ class SecuriteRoomSensor(SensorEntity):
         }
 
         self._attr_native_value = SECURITY_STATE_OFF
-        self._attr_extra_state_attributes = {"raisons": []}
+        self._attr_extra_state_attributes = {"raisons": [], "en_chauffe": False}
 
     async def async_added_to_hass(self) -> None:
         """Start security monitoring for this room."""
@@ -295,7 +296,13 @@ class SecuriteRoomSensor(SensorEntity):
         state, reasons = compute_room_security(self.hass, self._entry)
 
         self._attr_native_value = state
-        self._attr_extra_state_attributes = {"raisons": reasons}
+        self._attr_extra_state_attributes = {
+            "raisons": reasons,
+            # Chauffe réelle de la pièce (lue par la carte pour son badge)
+            "en_chauffe": is_room_really_heating(
+                self.hass, {**self._entry.data, **self._entry.options}
+            ),
+        }
 
     @callback
     def _handle_fault_change(self) -> None:
@@ -768,7 +775,11 @@ class _DailyHoursSensor(RestoreEntity, SensorEntity):
 
 
 class HeuresChauffeSensor(_DailyHoursSensor):
-    """Heures de chauffe de la pièce sur la journée (thermostat en chauffe)."""
+    """Heures de chauffe de la pièce sur la journée (chauffe réelle).
+
+    Électrique : thermostat en chauffe. Gaz : vanne ouverte et chaudière en
+    chauffe, y compris quand la pièce profite de la chaleur d'un groupe.
+    """
 
     _key = "heures_chauffe"
     _attr_name = "Heures de chauffe"
@@ -785,18 +796,20 @@ class HeuresChauffeSensor(_DailyHoursSensor):
             },
         )
 
-    def _climate_entity(self) -> str | None:
-        config = {**self._entry.data, **self._entry.options}
-
-        return config.get(CONF_CLIMATE)
+    def _config(self) -> dict:
+        return {**self._entry.data, **self._entry.options}
 
     def _watched(self) -> list[str]:
-        return [self._climate_entity()]
+        config = self._config()
+
+        return [
+            config.get(CONF_CLIMATE),
+            config.get(CONF_HEATER_ENTITY),
+            get_central_boiler_entity(self.hass),
+        ]
 
     def _is_active(self) -> bool:
-        state = self.hass.states.get(self._climate_entity())
-
-        return state is not None and state.attributes.get("hvac_action") == "heating"
+        return is_room_really_heating(self.hass, self._config())
 
 
 class ChaudiereHeuresSensor(_DailyHoursSensor):
