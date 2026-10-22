@@ -15,14 +15,18 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_AREA,
+    CONF_BOILER_ENTITY,
     CONF_BOOST_ENABLED,
     CONF_CLIMATE,
     CONF_DOOR_SENSOR,
     CONF_HEATER_ENTITY,
+    CONF_HEATING_TYPE,
+    CONF_MODE_SELECTOR,
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
     ENTRY_TYPE_ROOM,
+    HEATING_TYPE_GAS,
     SIGNAL_ROOM_BOOST,
     slugify_area,
 )
@@ -83,7 +87,12 @@ async def async_setup_entry(
 
 
 class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
-    """Master switch: turns every room's climate heat mode on or off."""
+    """Master switch: turns every room's climate heat mode on or off.
+
+    Il publie aussi en attributs les réglages de la config centrale utiles
+    à la carte : sélecteur de mode de la maison, chaudière et type de
+    chauffage (la carte ne peut pas lire la config de l'intégration).
+    """
 
     _attr_icon = "mdi:radiator"
     _attr_has_entity_name = True
@@ -106,8 +115,30 @@ class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
             "name": "Chauffage Intelligent",
         }
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Mode de la maison, chaudière et type de chauffage (config centrale)."""
+
+        config = {**self._entry.data, **self._entry.options}
+
+        attributes: dict[str, Any] = {
+            "heating_type": config.get(CONF_HEATING_TYPE, HEATING_TYPE_GAS),
+        }
+
+        mode_entity = config.get(CONF_MODE_SELECTOR)
+
+        if mode_entity:
+            attributes["mode_entity"] = mode_entity
+
+        boiler_entity = config.get(CONF_BOILER_ENTITY)
+
+        if boiler_entity:
+            attributes["boiler_entity"] = boiler_entity
+
+        return attributes
+
     async def async_added_to_hass(self) -> None:
-        """Restore the previous state and apply it immediately."""
+        """Restore the previous state and follow the central config."""
 
         await super().async_added_to_hass()
 
@@ -115,6 +146,16 @@ class ChauffageGeneralSwitch(RestoreEntity, SwitchEntity):
 
         if last_state is not None:
             self._attr_is_on = last_state.state == "on"
+
+        # Config centrale modifiée (mode, chaudière...) : rafraîchit les attributs.
+        self.async_on_remove(self._entry.add_update_listener(self._handle_entry_update))
+
+    async def _handle_entry_update(
+        self, hass: HomeAssistant, entry: ConfigEntry
+    ) -> None:
+        """La config centrale a changé : republier les attributs."""
+
+        self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on: set every room's climate to heat mode."""
