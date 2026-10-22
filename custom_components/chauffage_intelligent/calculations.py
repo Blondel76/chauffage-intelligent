@@ -13,6 +13,7 @@ from .const import (
     CONF_BOILER_ENTITY,
     CONF_CLIMATE,
     CONF_COLD_OFFSET,
+    CONF_HEATING_TYPE,
     CONF_HOT_OFFSET,
     CONF_HUM_EXCESSIVE,
     CONF_HUM_HIGH,
@@ -27,6 +28,8 @@ from .const import (
     DOMAIN,
     ENTRY_TYPE,
     ENTRY_TYPE_CENTRAL,
+    HEATING_TYPE_ELECTRIC,
+    HEATING_TYPE_GAS,
     HUMIDITE_SEUIL_ELEVEE,
     HUMIDITE_SEUIL_EXCESSIVE,
     HUMIDITE_SEUIL_TRES_ELEVEE,
@@ -362,6 +365,41 @@ def is_heater_open(hass: HomeAssistant, heater_entity: str | None) -> bool:
         return state.attributes.get("temperature") == VALVE_OPEN_TEMP
 
     return state.state == "on"
+
+
+def get_central_heating_type(hass: HomeAssistant) -> str:
+    """Type de chauffage de la maison (gaz par défaut)."""
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        config = {**entry.data, **entry.options}
+
+        if config.get(ENTRY_TYPE) == ENTRY_TYPE_CENTRAL:
+            return config.get(CONF_HEATING_TYPE, HEATING_TYPE_GAS)
+
+    return HEATING_TYPE_GAS
+
+
+def is_room_really_heating(hass: HomeAssistant, config: dict) -> bool:
+    """True si la pièce chauffe réellement (sert aux compteurs et aux heures de chauffe).
+
+    - Chauffage électrique : le thermostat de la pièce est en chauffe.
+    - Chauffage gaz : la vanne de la pièce est disponible ET ouverte, et la
+      chaudière (si elle est configurée) est en chauffe. Ce critère compte
+      aussi une pièce dont le thermostat est au repos mais dont la vanne est
+      ouverte parce qu'elle profite de la chaleur d'une pièce de son groupe.
+    """
+
+    if get_central_heating_type(hass) == HEATING_TYPE_ELECTRIC:
+        climate = hass.states.get(config.get(CONF_CLIMATE))
+
+        return climate is not None and climate.attributes.get("hvac_action") == "heating"
+
+    if not is_heater_open(hass, config.get(CONF_HEATER_ENTITY)):
+        return False
+
+    boiler_entity = get_central_boiler_entity(hass)
+
+    return not boiler_entity or is_boiler_heating(hass, boiler_entity)
 
 
 def is_room_cold(hass: HomeAssistant, config: dict) -> bool:
