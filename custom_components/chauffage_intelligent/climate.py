@@ -9,9 +9,9 @@ son `hvac_action`, comme avec un thermostat externe.
 Régulation (reprise du principe du thermostat générique de Home Assistant) :
 - repos -> chauffe quand température <= consigne - tolérance basse ;
 - chauffe -> repos quand température >= consigne + tolérance haute ;
-- une durée minimale sépare deux changements chauffe/repos (protège la vanne
-  et le relais). Elle ne retarde pas l'arrêt si le thermostat est éteint ou
-  si le capteur de température est indisponible.
+- une durée minimale après un arrêt empêche un redémarrage trop rapide
+  (protège la vanne et le relais). Elle ne retarde JAMAIS un arrêt : la
+  chauffe s'arrête dès que la consigne est atteinte.
 
 Le planning change le preset (set_preset_mode) : la consigne manuelle
 éventuelle est alors abandonnée. Le mode, le preset et la consigne manuelle
@@ -246,17 +246,14 @@ class RoomThermostat(RestoreEntity, ClimateEntity):
 
     @callback
     def _evaluate(self) -> None:
-        """Décide chauffe/repos (hystérésis + durée minimale entre cycles)."""
+        """Décide chauffe/repos (hystérésis + délai minimal avant un redémarrage)."""
 
         config = self._config()
         temp = self.current_temperature
         target = self.target_temperature
 
-        urgent = False
-
         if self._hvac_mode == HVACMode.OFF or temp is None or target is None:
             wanted = False
-            urgent = True
         else:
             cold = _setting(config, CONF_COLD_TOLERANCE, DEFAULT_COLD_TOLERANCE)
             hot = _setting(config, CONF_HOT_TOLERANCE, DEFAULT_HOT_TOLERANCE)
@@ -271,7 +268,9 @@ class RoomThermostat(RestoreEntity, ClimateEntity):
 
         now = dt_util.utcnow()
 
-        if not urgent and self._last_change is not None:
+        # Seul un DÉMARRAGE est retardé (délai écoulé depuis le dernier
+        # arrêt) ; un arrêt est toujours immédiat.
+        if wanted and self._last_change is not None:
             min_cycle = timedelta(
                 minutes=_setting(config, CONF_MIN_CYCLE, DEFAULT_MIN_CYCLE)
             )
