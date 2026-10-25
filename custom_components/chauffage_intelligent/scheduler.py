@@ -26,7 +26,7 @@ from homeassistant.helpers.start import async_at_started
 
 from .boiler import update_boiler_state
 from .calculations import (
-    calculate_heating_time,
+    calculate_next_heating_time,
     get_float,
     get_next_schedule,
     get_previous_schedule,
@@ -312,11 +312,19 @@ class ChauffageScheduler:
         except (AttributeError, ValueError, TypeError):
             return COEFFICIENT_DEFAULT
 
-    def _anticipation_minutes(self) -> int:
-        """Return the estimated heating time in minutes (0 = no anticipation)."""
+    def _anticipation_minutes(self, planning: str) -> int:
+        """Return the estimated heating time in minutes (0 = no anticipation).
 
-        besoin = calculate_heating_time(
-            self.hass, self.entry.data, self._read_coefficient()
+        Calculé avec la température du PROCHAIN créneau : la consigne du
+        thermostat est encore celle du créneau en cours (écart nul en fin de
+        chauffe), elle ne permettrait jamais d'anticiper.
+        """
+
+        besoin = calculate_next_heating_time(
+            self.hass,
+            {**self.entry.data, **self.entry.options},
+            planning,
+            self._read_coefficient(),
         )
 
         return besoin if 0 < besoin < 180 else 0
@@ -359,7 +367,9 @@ class ChauffageScheduler:
 
         if target is not None and _preset_of(next_slot) is not None:
             if self._anticipated_target != target:
-                start = target - timedelta(minutes=self._anticipation_minutes() + 1)
+                start = target - timedelta(
+                    minutes=self._anticipation_minutes(planning) + 1
+                )
 
                 if now >= start:
                     self._anticipated_target = target
