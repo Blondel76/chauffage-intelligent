@@ -8,6 +8,20 @@ from datetime import datetime, timedelta
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_AREA,
+    CONF_BOOST_ENABLED,
+    CONF_BOOST_PRESET,
+    CONF_DOOR_SENSOR,
+    CONF_MODE_PLANNINGS,
+    CONF_PRESET_TEMPS,
+    DEFAULT_BOOST_PRESET,
+    DEFAULT_PLANNING,
+    DEFAULT_PRESET_TEMP,
+    DEFAULT_PRESET_TEMPS,
+    LEARNING_DECAY_SAMPLES,
+    LEARNING_MIN_WEIGHT,
+    LEARNING_START_WEIGHT,
+    slugify_area,
     AERATION_SEUIL_POSSIBLE,
     AERATION_SEUIL_RECOMMANDEE,
     CONF_BOILER_ENTITY,
@@ -90,24 +104,28 @@ def calculate_heating_time(
     hass: HomeAssistant,
     config: dict,
     coefficient: float,
+    target: float | None = None,
 ) -> int:
-    """Calculate the estimated heating time."""
+    """Calculate the estimated heating time (minutes).
 
-    temp = get_float(hass, config.get(CONF_TEMP_INT), 0)
+    `target` : consigne visée. Par défaut, la consigne actuelle du
+    thermostat de la pièce. Pour anticiper un créneau à venir, on passe la
+    température du preset de ce créneau (cf. calculate_next_heating_time) :
+    la consigne actuelle est alors celle du créneau en cours, pas celle visée.
+    """
 
-    climate = hass.states.get(config.get(CONF_CLIMATE))
+    temp = _numeric_state(hass, config.get(CONF_TEMP_INT))
 
-    if climate is None:
+    if temp is None:
         return 0
 
-    consigne = climate.attributes.get("temperature")
+    if target is None:
+        target = _room_target(hass, config)
 
-    try:
-        consigne = float(consigne)
-    except (ValueError, TypeError):
-        consigne = 0
+    if target is None:
+        return 0
 
-    delta = consigne - temp
+    delta = float(target) - temp
 
     coefficient = _clamp_coefficient(float(coefficient))
 
@@ -217,7 +235,7 @@ def calculate_anticipated_time(
     except (ValueError, TypeError):
         return cible_ok
 
-    besoin = calculate_heating_time(hass, config, coefficient)
+    besoin = calculate_next_heating_time(hass, config, planning, coefficient)
 
     if besoin <= 0 or besoin >= 180:
         return cible_ok
@@ -247,6 +265,7 @@ def calculate_new_coefficient(
     config: dict,
     ancien: float,
     derive_entity_id: str,
+    weight: float = 0.2,
 ) -> float | None:
     """Calculate a new heating coefficient from the derivative."""
 
@@ -264,7 +283,7 @@ def calculate_new_coefficient(
         return None
 
     nouveau = 1 / derive
-    coefficient = ancien * 0.8 + nouveau * 0.2
+    coefficient = ancien * (1 - weight) + nouveau * weight
 
     return round(_clamp_coefficient(coefficient), 1)
 
@@ -590,3 +609,125 @@ def calculate_humidity_level(hass: HomeAssistant, config: dict) -> str:
         return "unknown"
 
     return HUMIDITY_LEVELS[_humidity_rank(get_float(hass, hum_int), config)]
+
+
+# ==========================================================
+# THERMOSTAT INTÉGRÉ : PRESETS, TEMPÉRATURES, FENÊTRE, APPRENTISSAGE
+# ==========================================================
+
+
+def _presets_of_planning(planning: str) -> list[str]:
+    """Noms de presets d'une chaîne de planning 'HH:MM|preset,HH:MM|preset'."""
+
+    presets: list[str] = []
+
+    for item in planning.split(","):
+
+        if "|" not in item:
+            continue
+
+        preset = item.split("|", 1)[1].strip()
+
+        if preset and preset not in presets:
+            presets.append(preset)
+
+    return presets
+
+
+def planning_presets(config: dict) -> list[str]:
+    """Presets utilisés par la pièce : plannings de tous les modes + preset du boost."""
+
+    presets: list[str] = []
+
+    for planning in (config.get(CONF_MODE_PLANNINGS) or {}).values():
+
+        if not isinstance(planning, str):
+            continue
+
+        for preset in _presets_of_planning(planning):
+            if preset not in presets:
+                presets.append(preset)
+
+    if config.get(CONF_BOOST_ENABLED, False):
+        raw = config.get(CONF_BOOST_PRESET)
+        boost_preset = (
+            raw.strip() if isinstance(raw, str) and raw.strip() else DEFAULT_BOOST_PRESET
+        )
+
+        if boost_preset not in presets:
+            presets.append(boost_preset)
+
+    if not presets:
+        presets = _presets_of_planning(DEFAULT_PLANNING)
+
+    return presets
+
+
+def get_preset_temperature(config: dict, preset: str | None) -> float:
+    """Température d'un preset : réglage de la pièce, sinon valeur du nom connu, sinon défaut."""
+
+    if not preset:
+        return DEFAULT_PRESET_TEMP
+
+    try:
+        return float((config.get(CONF_PRESET_TEMPS) or {}).get(preset))
+    except (TypeError, ValueError):
+        pass
+
+    return DEFAULT_PRESET_TEMPS.get(preset.strip().lower(), DEFAULT_PRESET_TEMP)
+
+
+def next_slot_target(config: dict, planning: str) -> float | None:
+    """Température visée par le prochain créneau du planning, ou None."""
+
+    slot = get_next_schedule(planning)
+
+    if slot == "unknown" or "|" not in slot:
+        return None
+
+    preset = slot.split("|", 1)[1].strip()
+
+    if not preset:
+        return None
+
+    return get_preset_temperature(config, preset)
+
+
+def calculate_next_heating_time(
+    hass: HomeAssistant,
+    config: dict,
+    planning: str,
+    coefficient: float,
+) -> int:
+    """Temps de chauffe (min) pour atteindre la température du PROCHAIN créneau.
+
+    C'est ce calcul qui permet le démarrage anticipé : la consigne actuelle
+    est encore celle du créneau en cours (écart nul en fin de chauffe).
+    """
+
+    target = next_slot_target(config, planning)
+
+    if target is None:
+        return 0
+
+    return calculate_heating_time(hass, config, coefficient, target)
+
+
+def is_window_open(hass: HomeAssistant, config: dict) -> bool:
+    """True si la fenêtre/porte de la pièce est ouverte (capteur ou interrupteur manuel)."""
+
+    entity_id = config.get(CONF_DOOR_SENSOR) or (
+        f"switch.fenetre_ouverte_{slugify_area(config.get(CONF_AREA) or '')}"
+    )
+
+    state = hass.states.get(entity_id)
+
+    return state is not None and state.state == "on"
+
+
+def learning_weight(samples: int) -> float:
+    """Poids d'une nouvelle mesure du coefficient : décroît avec les mesures déjà apprises."""
+
+    weight = LEARNING_START_WEIGHT / (1 + max(int(samples), 0) / LEARNING_DECAY_SAMPLES)
+
+    return max(weight, LEARNING_MIN_WEIGHT)
