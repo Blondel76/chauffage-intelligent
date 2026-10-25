@@ -33,8 +33,8 @@ from homeassistant.util import dt as dt_util
 from .calculations import (
     calculate_aeration,
     calculate_anticipated_time,
-    calculate_heating_time,
     calculate_humidity_level,
+    calculate_next_heating_time,
     get_central_boiler_entity,
     get_next_schedule,
     get_previous_schedule,
@@ -474,9 +474,12 @@ class TempsDeChauffeSensor(ChauffageSensorBase):
 
     def update(self) -> None:
         """Update heating time."""
-        self._attr_native_value = calculate_heating_time(
+        # Temps pour atteindre la température du PROCHAIN créneau (et non
+        # de la consigne actuelle, qui retombe à 0 en fin de chauffe).
+        self._attr_native_value = calculate_next_heating_time(
             self.hass,
-            self._entry.data,
+            {**self._entry.data, **self._entry.options},
+            self._get_planning(),
             self._read_coefficient(),
         )
 
@@ -496,6 +499,7 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
         self._attr_native_value = 0
         self._reference_time = None
         self._reference_temp = None
+        self._continuous = False
         self._remove_listener = None
 
     async def async_added_to_hass(self) -> None:
@@ -519,7 +523,12 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
 
     @callback
     def _handle_temp_change(self, event: Event) -> None:
-        """React to a new interior temperature reading."""
+        """React to a new interior temperature reading.
+
+        L'attribut « chauffe_continue » indique que la pièce chauffait
+        réellement à chaque relevé de l'intervalle mesuré : seule une dérive
+        continue sert à l'apprentissage du coefficient.
+        """
         new_state = event.data.get("new_state")
 
         if new_state is None:
@@ -531,11 +540,18 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
             return
 
         now = dt_util.utcnow()
+        heating = is_room_really_heating(
+            self.hass, {**self._entry.data, **self._entry.options}
+        )
 
         if self._reference_time is None:
             self._reference_time = now
             self._reference_temp = temp
+            self._continuous = heating
             return
+
+        if not heating:
+            self._continuous = False
 
         delta_minutes = (now - self._reference_time).total_seconds() / 60
 
@@ -546,9 +562,14 @@ class DeriveSensor(RestoreEntity, ChauffageSensorBase):
             (temp - self._reference_temp) / delta_minutes,
             3,
         )
+        self._attr_extra_state_attributes = {
+            **self._attr_extra_state_attributes,
+            "chauffe_continue": self._continuous,
+        }
 
         self._reference_time = now
         self._reference_temp = temp
+        self._continuous = heating
 
         self.async_write_ha_state()
 
