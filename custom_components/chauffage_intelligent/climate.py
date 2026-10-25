@@ -11,7 +11,9 @@ Régulation (reprise du principe du thermostat générique de Home Assistant) :
 - chauffe -> repos quand température >= consigne + tolérance haute ;
 - une durée minimale après un arrêt empêche un redémarrage trop rapide
   (protège la vanne et le relais). Elle ne retarde JAMAIS un arrêt : la
-  chauffe s'arrête dès que la consigne est atteinte.
+  chauffe s'arrête dès que la consigne est atteinte. Elle ne s'applique pas
+  non plus à la remise en marche du thermostat (off -> heat), par exemple à
+  la fermeture d'une fenêtre.
 
 Le planning change le preset (set_preset_mode) : la consigne manuelle
 éventuelle est alors abandonnée. Le mode, le preset et la consigne manuelle
@@ -308,6 +310,12 @@ class RoomThermostat(RestoreEntity, ClimateEntity):
 
         if hvac_mode not in (HVACMode.HEAT, HVACMode.OFF):
             return
+
+        # Remise en marche après un arrêt volontaire (fenêtre fermée, chauffage
+        # général rallumé...) : pas de délai minimal, il ne vaut que pour un
+        # redémarrage dû à la régulation elle-même.
+        if self._hvac_mode == HVACMode.OFF and hvac_mode == HVACMode.HEAT:
+            self._last_change = None
 
         self._hvac_mode = HVACMode(hvac_mode)
         self._refresh()
