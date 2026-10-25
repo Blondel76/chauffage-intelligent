@@ -7,7 +7,9 @@ from homeassistant.core import HomeAssistant
 
 from .boost import RoomBoost
 from .const import (
+    CONF_AREA,
     CONF_BOILER_ENTITY,
+    CONF_CLIMATE,
     CONF_HEATING_TYPE,
     CONF_MODE_SELECTOR,
     CONF_TEMP_EXT_CENTRAL,
@@ -18,19 +20,21 @@ from .const import (
     ENTRY_TYPE_GROUP,
     ENTRY_TYPE_ROOM,
     HEATING_TYPE_GAS,
+    climate_entity_id,
+    slugify_area,
 )
 from .heating_monitor import RoomHeatingMonitor
 from .resolver import PlanningResolver
 from .scheduler import ChauffageScheduler
 
 CENTRAL_PLATFORMS = ["switch", "sensor", "binary_sensor"]
-ROOM_PLATFORMS = ["sensor", "number", "switch", "binary_sensor", "button"]
+ROOM_PLATFORMS = ["climate", "sensor", "number", "switch", "binary_sensor", "button"]
 
 
 def _preload_platforms() -> None:
     """Import platform modules ahead of time (blocking, run in executor)."""
 
-    from . import binary_sensor, button, number, sensor, switch  # noqa: F401
+    from . import binary_sensor, button, climate, number, sensor, switch  # noqa: F401
 
 
 def _get_central_mode_selector(hass: HomeAssistant) -> str | None:
@@ -41,6 +45,25 @@ def _get_central_mode_selector(hass: HomeAssistant) -> str | None:
             return entry.data.get(CONF_MODE_SELECTOR)
 
     return None
+
+
+def _migrate_room_climate(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Fait pointer la pièce vers son thermostat intégré.
+
+    Les pièces créées avec un thermostat externe sont migrées : leur
+    CONF_CLIMATE devient l'entité climate créée par l'intégration. Tout le
+    reste du code (scheduler, sécurité, calculs, carte) la lit donc sans
+    changement.
+    """
+
+    climate_id = climate_entity_id(slugify_area(entry.data[CONF_AREA]))
+
+    if entry.data.get(CONF_CLIMATE) == climate_id:
+        return
+
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_CLIMATE: climate_id}
+    )
 
 
 async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -132,6 +155,8 @@ async def async_setup_entry(
         entry.async_on_unload(entry.add_update_listener(_async_central_updated))
 
         return True
+
+    _migrate_room_climate(hass, entry)
 
     mode_selector = _get_central_mode_selector(hass)
     resolver = PlanningResolver(hass, entry, mode_selector)
