@@ -10,8 +10,18 @@ from homeassistant import config_entries
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import selector
 
+from .calculations import get_preset_temperature, planning_presets
 from .const import (
     CENTRAL_UNIQUE_ID,
+    CONF_COLD_TOLERANCE,
+    CONF_HOT_TOLERANCE,
+    CONF_MIN_CYCLE,
+    CONF_PRESET_TEMPS,
+    DEFAULT_COLD_TOLERANCE,
+    DEFAULT_HOT_TOLERANCE,
+    DEFAULT_MIN_CYCLE,
+    climate_entity_id,
+    slugify_area,
     CONF_AREA,
     CONF_BOILER_ENTITY,
     CONF_BOOST_DURATION,
@@ -194,6 +204,34 @@ def _threshold_fields(defaults: dict | None = None) -> dict:
             )
         ),
         vol.Required(
+            CONF_COLD_TOLERANCE,
+            default=defaults.get(CONF_COLD_TOLERANCE, DEFAULT_COLD_TOLERANCE),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX
+            )
+        ),
+        vol.Required(
+            CONF_HOT_TOLERANCE,
+            default=defaults.get(CONF_HOT_TOLERANCE, DEFAULT_HOT_TOLERANCE),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX
+            )
+        ),
+        vol.Required(
+            CONF_MIN_CYCLE,
+            default=defaults.get(CONF_MIN_CYCLE, DEFAULT_MIN_CYCLE),
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=30,
+                step=1,
+                unit_of_measurement="min",
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Required(
             CONF_HUM_HIGH,
             default=defaults.get(CONF_HUM_HIGH, HUMIDITE_SEUIL_ELEVEE),
         ): _humidity_selector(),
@@ -235,6 +273,27 @@ def _boost_schema(defaults: dict | None = None) -> vol.Schema:
                     mode=selector.NumberSelectorMode.BOX,
                 )
             ),
+        }
+    )
+
+
+def _presets_schema(presets: list[str], config: dict) -> vol.Schema:
+    """Une température par preset utilisé dans les plannings (et le boost) de la pièce."""
+
+    return vol.Schema(
+        {
+            vol.Required(
+                preset, default=get_preset_temperature(config, preset)
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=5,
+                    max=30,
+                    step=0.5,
+                    unit_of_measurement="°C",
+                    mode=selector.NumberSelectorMode.BOX,
+                )
+            )
+            for preset in presets
         }
     )
 
@@ -413,7 +472,14 @@ class ChauffageIntelligentConfigFlow(
 
         if user_input is not None:
             if _humidity_thresholds_valid(user_input):
-                self._room_data = {**user_input, ENTRY_TYPE: ENTRY_TYPE_ROOM}
+                self._room_data = {
+                    **user_input,
+                    ENTRY_TYPE: ENTRY_TYPE_ROOM,
+                    # Thermostat créé par l'intégration (plus de thermostat externe)
+                    CONF_CLIMATE: climate_entity_id(
+                        slugify_area(user_input[CONF_AREA])
+                    ),
+                }
 
                 if user_input.get(CONF_BOOST_ENABLED):
                     return await self.async_step_boost()
@@ -441,10 +507,6 @@ class ChauffageIntelligentConfigFlow(
                     selector.EntitySelectorConfig(
                         domain=["sensor"], device_class=["temperature"]
                     )
-                ),
-
-                vol.Required(CONF_CLIMATE): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["climate"])
                 ),
 
                 vol.Required(CONF_HEATER_ENTITY): selector.EntitySelector(
@@ -486,6 +548,28 @@ class ChauffageIntelligentConfigFlow(
                 mode: user_input[mode] for mode in modes
             }
 
+            return await self.async_step_presets()
+
+        return self.async_show_form(
+            step_id="plannings",
+            data_schema=_plannings_schema(modes, {}),
+        )
+
+    async def async_step_presets(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ):
+        """Dernière page : température de chaque preset utilisé par la pièce."""
+
+        presets = planning_presets(self._room_data)
+
+        if user_input is not None or not presets:
+
+            if user_input is not None:
+                self._room_data[CONF_PRESET_TEMPS] = {
+                    preset: float(user_input[preset]) for preset in presets
+                }
+
             await self.async_set_unique_id(self._room_data[CONF_AREA])
             self._abort_if_unique_id_configured()
 
@@ -496,8 +580,8 @@ class ChauffageIntelligentConfigFlow(
             return self.async_create_entry(title=title, data=self._room_data)
 
         return self.async_show_form(
-            step_id="plannings",
-            data_schema=_plannings_schema(modes, {}),
+            step_id="presets",
+            data_schema=_presets_schema(presets, self._room_data),
         )
 
     @staticmethod
@@ -623,16 +707,38 @@ class ChauffageIntelligentOptionsFlow(config_entries.OptionsFlow):
         existing = self.entry.data.get(CONF_MODE_PLANNINGS, {})
 
         if user_input is not None:
-            new_mode_plannings = {mode: user_input[mode] for mode in modes}
-            new_data = {
-                **self.entry.data,
+            self._pending_thresholds = {
                 **self._pending_thresholds,
-                CONF_MODE_PLANNINGS: new_mode_plannings,
+                CONF_MODE_PLANNINGS: {mode: user_input[mode] for mode in modes},
             }
-            self.hass.config_entries.async_update_entry(self.entry, data=new_data)
-            return self.async_create_entry(title="", data={})
+            return await self.async_step_room_presets()
 
         return self.async_show_form(
             step_id="room_plannings",
             data_schema=_plannings_schema(modes, existing),
+        )
+
+    async def async_step_room_presets(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ):
+        """Dernière page : température de chaque preset, puis sauvegarde de tout."""
+
+        merged = {**self.entry.data, **self._pending_thresholds}
+        presets = planning_presets(merged)
+
+        if user_input is not None or not presets:
+            new_data = {**merged}
+
+            if user_input is not None:
+                new_data[CONF_PRESET_TEMPS] = {
+                    preset: float(user_input[preset]) for preset in presets
+                }
+
+            self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+            return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="room_presets",
+            data_schema=_presets_schema(presets, merged),
         )
