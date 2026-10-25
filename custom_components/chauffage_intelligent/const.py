@@ -115,6 +115,47 @@ HUMIDITE_SEUIL_TRES_ELEVEE = 65
 HUMIDITE_SEUIL_EXCESSIVE = 70
 
 
+"""Thermostat intégré : une entité climate créée par pièce, réglée par pièce"""
+CONF_PRESET_TEMPS = "preset_temperatures"
+CONF_COLD_TOLERANCE = "Tolérance basse du thermostat (°C sous la consigne)"
+CONF_HOT_TOLERANCE = "Tolérance haute du thermostat (°C au-dessus de la consigne)"
+CONF_MIN_CYCLE = "Durée minimale entre deux changements chauffe/repos (min)"
+DEFAULT_COLD_TOLERANCE = 0.3
+DEFAULT_HOT_TOLERANCE = 0.0
+DEFAULT_MIN_CYCLE = 2
+THERMOSTAT_MIN_TEMP = 5.0
+THERMOSTAT_MAX_TEMP = 30.0
+THERMOSTAT_REFRESH_SECONDS = 30
+"""Température d'un preset non réglé dans la pièce : valeur du nom connu, sinon valeur par défaut"""
+DEFAULT_PRESET_TEMP = 18.0
+DEFAULT_PRESET_TEMPS = {
+    "comfort": 19.0,
+    "confort": 19.0,
+    "home": 19.0,
+    "activity": 20.0,
+    "boost": 21.0,
+    "eco": 17.0,
+    "sleep": 17.0,
+    "nuit": 17.0,
+    "away": 15.0,
+    "absent": 15.0,
+    "frost": 7.0,
+    "hors_gel": 7.0,
+    "hors gel": 7.0,
+}
+
+"""Apprentissage du coefficient : poids de la mesure = départ / (1 + mesures / décroissance), plancher"""
+LEARNING_START_WEIGHT = 0.3
+LEARNING_MIN_WEIGHT = 0.02
+LEARNING_DECAY_SAMPLES = 10
+
+
+def climate_entity_id(area_slug: str) -> str:
+    """Entity id du thermostat intégré d'une pièce."""
+
+    return f"climate.thermostat_{area_slug}"
+
+
 """formule pour uniformiser le code"""
 def slugify_area(area_name: str) -> str:
     """Convert an area name into a safe entity-id part."""
