@@ -470,7 +470,9 @@ class TempsDeChauffeSensor(ChauffageSensorBase):
 
     def __init__(self, entry: ConfigEntry, area_slug: str) -> None:
         """Initialize."""
-        super().__init__(entry, area_slug, "temps_de_chauffe", "Temps de chauffe")
+        super().__init__(
+            entry, area_slug, "temps_de_chauffe", "Temps de chauffe anticipation"
+        )
 
     def update(self) -> None:
         """Update heating time."""
